@@ -386,6 +386,40 @@ body.contents-active #legend { display: none; }
     cursor: pointer;
 }
 .file-row .file-rename:hover { background: #eef4fb; color: #0066cc; }
+.file-row .file-eye {
+    background: transparent;
+    color: #888;
+    padding: 0 6px;
+    font-size: 14px;
+    margin: 0 0 0 4px;
+    border: none;
+    border-radius: 3px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.4;
+    filter: grayscale(1);
+}
+.file-row .file-eye:hover { background: #eef4fb; opacity: 0.8; }
+.file-row .file-eye.active { opacity: 1; filter: none; color: #0066cc; }
+.file-row .file-eye.active:hover { background: #eef4fb; }
+
+.add-gpx-btn {
+    display: block;
+    width: 100%;
+    margin: 8px 0 0 0;
+    padding: 6px 10px;
+    font-size: 12px;
+    background: transparent;
+    color: #0066cc;
+    border: 1px dashed #94a3b8;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.add-gpx-btn:hover:not(:disabled) {
+    background: #eef4fb;
+    border-color: #0066cc;
+    border-style: solid;
+}
 
 .segment-actions { margin-bottom: 8px; }
 
@@ -835,6 +869,19 @@ body.contents-active #legend { display: none; }
     .file-row .file-remove:hover { background: #3a1e1e; }
     .file-row .file-rename { color: #ccc; }
     .file-row .file-rename:hover { background: #1e3550; color: #7ec8f0; }
+    .file-row .file-eye { color: #aaa; }
+    .file-row .file-eye:hover { background: #1e3550; }
+    .file-row .file-eye.active { color: #7ec8f0; }
+    .file-row .file-eye.active:hover { background: #1e3550; }
+    .add-gpx-btn {
+        background: transparent;
+        color: #7ec8f0;
+        border-color: #4a5a6a;
+    }
+    .add-gpx-btn:hover:not(:disabled) {
+        background: #1e3550;
+        border-color: #4a90d9;
+    }
 
     .relevance-badge { background: #2a2a2a; color: #999; }
     .relevance-badge.relevant { background: #0f3d1e; color: #7ee0a1; }

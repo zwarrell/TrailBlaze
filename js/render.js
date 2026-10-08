@@ -9,7 +9,12 @@ function drawBase() {
         map.removeLayer(state.baseLayer);
         state.baseLayer = null;
     }
-    if (!state.baseXmlDoc) return;
+    if (!state.baseXmlDoc) {
+        // Still refresh overlays — the user may have removed the active file but
+        // kept non-active ones visible as context.
+        drawOverlayBases();
+        return;
+    }
 
     const polylines = [];
     let counts = {trkseg: 0, rte: 0, skipped: 0, points: 0};
@@ -118,6 +123,7 @@ function drawBase() {
 
     state.baseLayer = L.layerGroup(polylines).addTo(map);
     drawWaypoints();
+    drawOverlayBases();
     console.log(
         `drawBase: ${counts.trkseg} trkseg(s) + ${counts.rte} rte(s), ` +
         `${polylines.length} rendered, ${counts.skipped} skipped (fewer than 2 valid points), ` +
@@ -175,6 +181,87 @@ function drawWaypoints() {
     if (markers.length) {
         state.waypointLayer = L.layerGroup(markers).addTo(map);
     }
+}
+
+// Paint every GPX in state.visibleBaseNames (except the active one) as a
+// non-interactive, low-opacity overlay so the user can see context while
+// editing the main file. Rebuilt from scratch every call — cheap enough since
+// overlays aren't the hot path.
+function drawOverlayBases() {
+    if (state.overlayBaseLayer) {
+        map.removeLayer(state.overlayBaseLayer);
+        state.overlayBaseLayer = null;
+    }
+    if (!state.visibleBaseNames || !state.visibleBaseNames.size) return;
+
+    const layers = [];
+    const OVERLAY_LINE_OPACITY = 0.35;
+    const OVERLAY_WPT_OPACITY = 0.5;
+
+    const walkUpTo = (el, tag) => {
+        while (el && el.nodeType === 1 && el.localName !== tag) el = el.parentNode;
+        return el && el.localName === tag ? el : null;
+    };
+
+    for (const name of state.visibleBaseNames) {
+        if (name === state.activeBaseName) continue;
+        const entry = state.baseCache.get(name);
+        if (!entry) continue;
+        const doc = entry.xmlDoc;
+
+        for (const trkseg of doc.getElementsByTagName('trkseg')) {
+            const trkEl = walkUpTo(trkseg.parentNode, 'trk');
+            const pts = [];
+            for (const pt of trkseg.getElementsByTagName('trkpt')) {
+                const lat = parseFloat(pt.getAttribute('lat'));
+                const lon = parseFloat(pt.getAttribute('lon'));
+                if (Number.isFinite(lat) && Number.isFinite(lon)) pts.push([lat, lon]);
+            }
+            if (pts.length < 2) continue;
+            const trackName = (trkEl && directChildText(trkEl, 'name')) || '(unnamed track)';
+            const color = (trkEl && trkColor(trkEl)) || '#0066cc';
+            const line = L.polyline(pts, {
+                color, weight: 3, opacity: OVERLAY_LINE_OPACITY,
+                interactive: false, pane: 'basePane',
+            });
+            line.bindTooltip(`${trackName} — ${name}`, {sticky: true, direction: 'top'});
+            layers.push(line);
+        }
+
+        for (const rte of doc.getElementsByTagName('rte')) {
+            const pts = [];
+            for (const pt of rte.getElementsByTagName('rtept')) {
+                const lat = parseFloat(pt.getAttribute('lat'));
+                const lon = parseFloat(pt.getAttribute('lon'));
+                if (Number.isFinite(lat) && Number.isFinite(lon)) pts.push([lat, lon]);
+            }
+            if (pts.length < 2) continue;
+            const routeName = directChildText(rte, 'name') || '(unnamed route)';
+            const line = L.polyline(pts, {
+                color: '#0066cc', weight: 3, opacity: OVERLAY_LINE_OPACITY,
+                interactive: false, pane: 'basePane',
+            });
+            line.bindTooltip(`${routeName} — ${name}`, {sticky: true, direction: 'top'});
+            layers.push(line);
+        }
+
+        for (const wpt of doc.getElementsByTagName('wpt')) {
+            const lat = parseFloat(wpt.getAttribute('lat'));
+            const lon = parseFloat(wpt.getAttribute('lon'));
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+            const wptName = directChildText(wpt, 'name') || '(waypoint)';
+            const color = wptColor(wpt) || '#0066cc';
+            const marker = L.circleMarker([lat, lon], {
+                radius: 5, color, fillColor: color,
+                fillOpacity: OVERLAY_LINE_OPACITY, opacity: OVERLAY_WPT_OPACITY,
+                weight: 2, interactive: false, pane: 'basePane',
+            });
+            marker.bindTooltip(`${wptName} — ${name}`, {direction: 'top'});
+            layers.push(marker);
+        }
+    }
+
+    if (layers.length) state.overlayBaseLayer = L.layerGroup(layers).addTo(map);
 }
 
 // Extend a bounds by every child in a layer group — polylines contribute their

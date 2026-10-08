@@ -135,6 +135,10 @@ function renderContentsPanel() {
             row.focus();
             zoomToContentsItem(row.dataset.kind, +row.dataset.idx);
         });
+        row.addEventListener('dblclick', (e) => {
+            if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
+            renameFeature(row.dataset.kind, +row.dataset.idx);
+        });
         row.addEventListener('keydown', (e) => rowNavKeydown(e, row, {
             onEnter: () => zoomToContentsItem(row.dataset.kind, +row.dataset.idx),
             onDelete: () => removeContentsItem(row.dataset.kind, +row.dataset.idx),
@@ -310,8 +314,10 @@ async function ingestFiles(fileList, cache) {
 function renderBaseList() {
     const el = document.getElementById('baseList');
     el.innerHTML = '';
-    const names = [...state.baseCache.keys()].sort((a, b) => b.localeCompare(a));
+    const names = [...state.baseCache.keys()].sort((a, b) =>
+        b.localeCompare(a, undefined, {sensitivity: 'base'}));
     for (const name of names) {
+        const isActive = state.activeBaseName === name;
         const row = document.createElement('div');
         row.className = 'file-row';
         row.tabIndex = 0;
@@ -319,7 +325,8 @@ function renderBaseList() {
         const radio = document.createElement('input');
         radio.type = 'radio';
         radio.name = 'baseActive';
-        radio.checked = state.activeBaseName === name;
+        radio.checked = isActive;
+        radio.title = 'Select as the main GPX to edit';
         radio.addEventListener('change', () => { if (radio.checked) setActiveBase(name); });
         row.appendChild(radio);
         const label = document.createElement('span');
@@ -332,6 +339,18 @@ function renderBaseList() {
         size.className = 'file-size';
         size.textContent = `${(state.baseCache.get(name).size / 1024).toFixed(0)} KB`;
         row.appendChild(size);
+        // Non-active rows get a show/hide toggle so the file can appear on the
+        // map as a view-only overlay next to the main GPX being edited.
+        if (!isActive) {
+            const visible = state.visibleBaseNames.has(name);
+            const eye = document.createElement('button');
+            eye.className = 'file-eye' + (visible ? ' active' : '');
+            eye.textContent = visible ? '👁' : '👁';
+            eye.title = visible ? 'Hide from map' : 'Show on map (view-only)';
+            eye.setAttribute('aria-pressed', visible ? 'true' : 'false');
+            eye.addEventListener('click', (e) => { e.stopPropagation(); toggleBaseVisibility(name); });
+            row.appendChild(eye);
+        }
         const renameBtn = document.createElement('button');
         renameBtn.className = 'file-rename';
         renameBtn.textContent = '✎';
@@ -344,12 +363,53 @@ function renderBaseList() {
         rm.title = 'Remove from list';
         rm.addEventListener('click', (e) => { e.stopPropagation(); removeBase(name); });
         row.appendChild(rm);
+        row.addEventListener('dblclick', (e) => {
+            if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
+            renameBaseFile(name);
+        });
         row.addEventListener('keydown', (e) => rowNavKeydown(e, row, {
             onEnter: () => { radio.checked = true; setActiveBase(name); },
             onDelete: () => removeBase(name),
         }));
         el.appendChild(row);
     }
+}
+
+function toggleBaseVisibility(name) {
+    if (state.visibleBaseNames.has(name)) state.visibleBaseNames.delete(name);
+    else state.visibleBaseNames.add(name);
+    drawOverlayBases();
+    renderBaseList();
+}
+
+// Create a brand-new empty GPX in the cache and make it active. Lets the user
+// draw a fresh route while keeping other GPX files on the map as overlays.
+function addNewBaseGpx() {
+    const input = prompt('New GPX filename:', 'new.gpx');
+    if (input === null) return;
+    let clean = input.trim();
+    if (!clean) return;
+    if (!/\.gpx$/i.test(clean)) clean += '.gpx';
+    if (state.baseCache.has(clean)) {
+        alert(`A file named "${clean}" is already in the list.`);
+        return;
+    }
+    const stem = clean.replace(/\.gpx$/i, '');
+    const xmlStr =
+        `<?xml version="1.0" encoding="UTF-8"?>\n` +
+        `<gpx xmlns="${GPX_NS}" version="1.1" creator="TrailBlaze">\n` +
+        `  <metadata><name>${escapeHtml(stem)}</name></metadata>\n` +
+        `</gpx>\n`;
+    const xmlDoc = parseGpx(xmlStr);
+    const trksegs = extractTrksegs(xmlDoc);
+    const points = flatten(trksegs);
+    state.baseCache.set(clean, {xmlDoc, trksegs, points, size: xmlStr.length});
+    // Previously-active file should stay visible as context — add it to the
+    // overlay set so the user keeps seeing it while they build the new one.
+    if (state.activeBaseName && state.activeBaseName !== clean) {
+        state.visibleBaseNames.add(state.activeBaseName);
+    }
+    setActiveBase(clean);
 }
 
 // Rename a GPX in the base cache. Purely cosmetic — only affects the filename
@@ -372,6 +432,10 @@ function renameBaseFile(oldName) {
         rebuilt.set(k === oldName ? clean : k, v);
     }
     state.baseCache = rebuilt;
+    if (state.visibleBaseNames.has(oldName)) {
+        state.visibleBaseNames.delete(oldName);
+        state.visibleBaseNames.add(clean);
+    }
     if (state.activeBaseName === oldName) {
         state.activeBaseName = clean;
         // Refresh the "Active GPX" line to show the new name.
@@ -464,6 +528,9 @@ function setActiveBase(name) {
     const entry = state.baseCache.get(name);
     if (!entry) return;
     state.activeBaseName = name;
+    // Newly-active file is always fully rendered — strip it from the overlay set
+    // so we don't double-draw it.
+    state.visibleBaseNames.delete(name);
     state.baseXmlDoc = entry.xmlDoc;
     // Recompute from the doc so routes are included even if the cache entry
     // was built with the older trkseg-only ingest.
@@ -483,6 +550,7 @@ function setActiveBase(name) {
             .filter(([, r]) => r.relevant)
             .map(([n]) => n)
     );
+    renderBaseList();
     renderRideList();
     updateRideInfo();
     recompute();
@@ -508,6 +576,7 @@ function updateRideInfo() {
 
 function removeBase(name) {
     state.baseCache.delete(name);
+    state.visibleBaseNames.delete(name);
     if (state.activeBaseName === name) {
         state.activeBaseName = null;
         state.baseXmlDoc = null;
@@ -545,9 +614,19 @@ async function handleBaseFiles(fileList) {
     const gpx = [...fileList].filter(f => /\.gpx$/i.test(f.name));
     if (!gpx.length) return;
     const added = await ingestFiles(gpx, state.baseCache);
-    renderBaseList();
-    if (added.length && !state.activeBaseName) {
-        setActiveBase(added[0]);
+    // If nothing is active yet, the first new file becomes the main one.
+    // Every other newly-added file defaults to visible as a map overlay.
+    const willActivate = (!state.activeBaseName && added.length) ? added[0] : null;
+    for (const name of added) {
+        if (name !== willActivate && name !== state.activeBaseName) {
+            state.visibleBaseNames.add(name);
+        }
+    }
+    if (willActivate) {
+        setActiveBase(willActivate);
+    } else {
+        drawOverlayBases();
+        renderBaseList();
     }
 }
 
@@ -689,6 +768,7 @@ if (SIMPLE_MODE) {
 
 wireDropzone('baseDropzone', 'baseFiles', handleBaseFiles);
 wireDropzone('rideDropzone', 'rideFiles', handleRideFiles);
+document.getElementById('addBaseGpx').addEventListener('click', addNewBaseGpx);
 
 // Prevent the browser from navigating away if a file is dropped outside the zones.
 window.addEventListener('dragover', e => e.preventDefault());

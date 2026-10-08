@@ -118,6 +118,8 @@ const state = {
 
     activeBaseName: null,
     activeRideNames: new Set(),
+    // Non-active base GPX names shown on the map as view-only overlays.
+    visibleBaseNames: new Set(),
 
     baseXmlDoc: null,
     basePoints: [],
@@ -125,6 +127,7 @@ const state = {
     relevanceGrid: null,     // coarse grid for relevance detection
     rideRelevance: new Map(),// rideName -> {percent, relevant}
     baseLayer: null,
+    overlayBaseLayer: null,  // L.layerGroup for visible non-active bases
 
     segments: [],           // [{id, rideName, indices, novel, included, distance, trksegIdx, layer}]
     rideLayerGroup: L.layerGroup().addTo(map),
