@@ -83,7 +83,11 @@ function renderMergeQueue() {
 
 function finishMergeQueue() {
     if (state.mergeSelection.length < 2) return;
-    const suggested = state.mergeSelection[0].name;
+    // Prefer the first base track that has a real name — the first-selected
+    // piece may be a ride segment whose name is just an auto-generated date.
+    const namedBase = state.mergeSelection.find(s =>
+        s.kind === 'baseTrack' && s.name && s.name !== '(unnamed track)');
+    const suggested = namedBase ? namedBase.name : state.mergeSelection[0].name;
     const newName = prompt(
         `Name for merged track (${state.mergeSelection.length} pieces):`,
         suggested);
@@ -263,9 +267,16 @@ function splitBaseTrackAt(trkEl, latlng) {
     // Share the split point in both halves so they visually connect.
     const trk1 = buildTrk(allPts.slice(0, bestIdx + 1), name1);
     const trk2 = buildTrk(allPts.slice(bestIdx), name2);
+    // Carry the original track's color onto both halves so a split doesn't
+    // visually reset the track back to the default blue.
+    const origColor = trkColor(trkEl);
     trkEl.parentNode.insertBefore(trk1, trkEl);
     trkEl.parentNode.insertBefore(trk2, trkEl);
     trkEl.parentNode.removeChild(trkEl);
+    if (origColor) {
+        setTrkColor(trk1, origColor);
+        setTrkColor(trk2, origColor);
+    }
     refreshBaseAfterEdit(`Split "${origName}" into 2 tracks.`);
 }
 
@@ -450,6 +461,9 @@ function setActiveTool(tool) {
     if (state.activeTool === 'extend') { state.extendTarget = null; state.extendNewPoints = []; }
     if (state.activeTool === 'draw')   { state.drawPoints = []; }
     if (state.activeTool === 'edit')   { state.editTarget = null; state.editPoints = []; }
+    // Entering a tool clears the hover-click selection so its green highlight
+    // doesn't fight with tool-specific colors.
+    if (tool) state.selectedTrack = null;
     // Any in-tool history is discarded when the tool changes.
     state.toolHistory = [];
     state.toolRedoStack = [];
@@ -1079,6 +1093,11 @@ function deleteWaypointEl(wptEl) {
 // Map-level click for Extend / Draw / Add Waypoint (adds points when clicking blank map).
 // Polyline click handlers use L.DomEvent.stop to prevent propagation here.
 map.on('click', (e) => {
+    // Clicking empty map area with no tool active clears any track selection.
+    if (!state.activeTool && state.selectedTrack) {
+        state.selectedTrack = null;
+        drawBase();
+    }
     if (state.activeTool === 'extend' && state.extendTarget) {
         snapshotToolState();
         const snap = findSnap(e.latlng);

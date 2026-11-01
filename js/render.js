@@ -28,39 +28,57 @@ function drawBase() {
         if (state.editTarget && ownerEl === state.editTarget.trkEl) return;
         counts.points += pts.length;
         const highlighted = ownerEl && isSelectedForMerge('baseTrack', ownerEl);
+        const isSelected = ownerEl && state.selectedTrack === ownerEl;
         // In compare mode, force blue so the legend matches. Outside compare
         // mode, honor the TrailTech <TT:Color> per-track when present.
         const ownColor = (!compareOn && ownerEl && ownerEl.localName === 'trk')
             ? trkColor(ownerEl) : null;
+        // Merge-highlight (red) wins over selection (green) wins over default.
         const style = highlighted
             ? {color: '#e63946', weight: 6, opacity: 0.95, pane: 'basePane'}
-            : {color: ownColor || '#0066cc', weight: 4, opacity: 0.75, pane: 'basePane'};
+            : isSelected
+                ? {color: '#2ecc71', weight: 6, opacity: 0.95, pane: 'basePane'}
+                : {color: ownColor || '#0066cc', weight: 4, opacity: 0.75, pane: 'basePane'};
         const line = L.polyline(pts, style);
         line._trkEl = ownerEl;
         line._trkName = name;
         line.bindTooltip(name, {sticky: true, direction: 'top'});
+        // Manual click-timing double-click detection, matching the sidebar row
+        // behavior. Leaflet's native dblclick was unreliable here because the
+        // single-click handler rebuilt the base layer mid-click, breaking the
+        // click-pair detection. Counting clicks ourselves sidesteps that.
+        let singleClickTimer = null;
         line.on('click', (e) => {
             L.DomEvent.stop(e); // don't bubble to map click
             const tool = state.activeTool;
             if (tool === 'merge') {
                 handleMergeTrackClick(line, e.latlng);
-            } else if (tool === 'split') {
-                splitBaseTrackAt(line._trkEl, e.latlng);
-            } else if (tool === 'extend') {
-                handleExtendBaseClick(line, e.latlng);
-            } else if (tool === 'edit') {
-                handleEditBaseClick(line);
-            } else if (!tool) {
-                L.popup().setLatLng(e.latlng).setContent(trackStatsPopupHtml(line._trkEl, name)).openOn(map);
-                scrollContentsToItem('trk', line._trkEl);
+                return;
             }
-        });
-        // Double-click enters Edit mode on this track directly.
-        line.on('dblclick', (e) => {
-            L.DomEvent.stop(e);
-            if (!line._trkEl || line._trkEl.localName !== 'trk') return;
-            if (state.activeTool !== 'edit') setActiveTool('edit');
-            handleEditBaseClick(line);
+            if (tool === 'split')  { splitBaseTrackAt(line._trkEl, e.latlng); return; }
+            if (tool === 'extend') { handleExtendBaseClick(line, e.latlng);   return; }
+            if (tool === 'edit')   { handleEditBaseClick(line);                return; }
+            if (tool) return;
+
+            if (singleClickTimer !== null) {
+                // Second click within the double-click window → rename.
+                clearTimeout(singleClickTimer);
+                singleClickTimer = null;
+                if (!line._trkEl || !state.baseXmlDoc) return;
+                const kind = line._trkEl.localName; // 'trk' or 'rte'
+                const idx = [...state.baseXmlDoc.getElementsByTagName(kind)].indexOf(line._trkEl);
+                if (idx !== -1 && typeof renameFeature === 'function') renameFeature(kind, idx);
+                return;
+            }
+            // Capture the click position for the deferred single-click action.
+            const latlng = e.latlng;
+            singleClickTimer = setTimeout(() => {
+                singleClickTimer = null;
+                state.selectedTrack = line._trkEl;
+                drawBase();
+                L.popup().setLatLng(latlng).setContent(trackStatsPopupHtml(line._trkEl, name)).openOn(map);
+                scrollContentsToItem('trk', line._trkEl);
+            }, 300);
         });
         // Highlight on hover so the user knows which track is under the cursor.
         line.on('mouseover', () => {
@@ -69,7 +87,9 @@ function drawBase() {
         });
         line.on('mouseout', () => {
             if (isSelectedForMerge('baseTrack', line._trkEl)) return;
-            line.setStyle({weight: 4, opacity: 0.6});
+            // Preserve the selected (weight 6) look so it stays visibly chosen.
+            if (state.selectedTrack === line._trkEl) line.setStyle({weight: 6, opacity: 0.95});
+            else line.setStyle({weight: 4, opacity: 0.6});
             if (state.activeTool === 'split') hideGhostPoint();
         });
         line.on('mousemove', (e) => {
@@ -300,6 +320,11 @@ function drawRide() {
             style = {color: '#ff8800', weight: 4, opacity: 0.9};
         }
         const line = L.polyline(latlngs, style);
+        // Tooltip with the segment's name so hover shows the track name, which
+        // is especially helpful in merge mode when picking pieces to combine.
+        const segLabel = seg.name || defaultSegmentName(seg, 1);
+        const rideLabel = seg.rideName.replace(/\.gpx$/i, '');
+        line.bindTooltip(`${rideLabel} — ${segLabel}`, {sticky: true, direction: 'top'});
         if (seg.novel) {
             line.on('click', (e) => {
                 L.DomEvent.stop(e);

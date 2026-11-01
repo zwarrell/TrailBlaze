@@ -9,6 +9,21 @@
 // upscales the last-available tile.
 const map = L.map('map', {maxZoom: 22}).setView([40.76, -112.78], 12);
 
+// Pan to the user's location on initial load when the browser grants
+// permission. The hardcoded setView above stays as a fallback so the map is
+// usable before (or if) geolocation resolves. Skip the pan if a GPX has
+// been loaded in the meantime — that would stomp the import's fitBounds.
+if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            if (state.baseXmlDoc) return;
+            map.setView([pos.coords.latitude, pos.coords.longitude], 12);
+        },
+        () => {},
+        {timeout: 10000, maximumAge: 300000}
+    );
+}
+
 
 // Base polylines live in a pane above the default overlay pane so their
 // hover/click events aren't stolen by ride polylines drawn on top of them.
@@ -157,6 +172,7 @@ state.mergeSelection = []; // [{kind: 'baseTrack'|'rideSeg', ref, name}]
 state.extendTarget = null; // {trkEl, appendAt: 'start'|'end'}
 state.extendNewPoints = []; // [{lat, lon}]
 state.drawPoints = []; // [{lat, lon}]
+state.selectedTrack = null; // currently-selected <trk>/<rte> element, highlighted green
 state.editTarget = null; // {trkEl, name} — the base track being edited
 state.editPoints = []; // [{lat, lon, raw?}] — full editable copy of the track's points
 state.previewLayer = null;

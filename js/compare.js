@@ -245,9 +245,18 @@ function renderSegList() {
             const nameInput = document.createElement('input');
             nameInput.type = 'text';
             nameInput.className = 'seg-name';
-            nameInput.placeholder = defaultSegmentName(seg, localIdx);
-            nameInput.value = seg.name ?? '';
-            nameInput.addEventListener('input', () => { seg.name = nameInput.value.trim() || null; });
+            const defaultName = defaultSegmentName(seg, localIdx);
+            nameInput.placeholder = defaultName;
+            nameInput.value = seg.name ?? defaultName;
+            nameInput.addEventListener('input', () => {
+                seg.name = nameInput.value.trim() || null;
+                // Keep the map tooltip in sync so hovering shows the live name.
+                if (seg.layer && seg.layer.setTooltipContent) {
+                    const segLabel = seg.name || defaultName;
+                    const rideLabel = seg.rideName.replace(/\.gpx$/i, '');
+                    seg.layer.setTooltipContent(`${rideLabel} — ${segLabel}`);
+                }
+            });
             row.appendChild(nameInput);
 
             const snapBtn = document.createElement('button');
@@ -330,9 +339,32 @@ function refocusSegmentRow(segId) {
     if (row) row.focus({preventScroll: true});
 }
 
+// Walk the ride's XML doc to find the <trk><name> that owns this segment.
+// trksegIdx matches document order of <trkseg> elements.
+function rideTrackNameForSeg(seg) {
+    const ride = state.rideCache.get(seg.rideName);
+    if (!ride?.xmlDoc) return null;
+    const trksegs = ride.xmlDoc.getElementsByTagName('trkseg');
+    const trkseg = trksegs[seg.trksegIdx];
+    if (!trkseg) return null;
+    let el = trkseg.parentNode;
+    while (el && el.nodeType === 1 && el.localName !== 'trk') el = el.parentNode;
+    if (!el || el.localName !== 'trk') return null;
+    for (const child of el.children) {
+        if (child.localName === 'name') {
+            const t = (child.textContent || '').trim();
+            if (t) return t;
+        }
+    }
+    return null;
+}
+
 function defaultSegmentName(seg /*, localIdx */) {
-    // Prefer the actual timestamp on the first point; fall back to a date
-    // embedded in the filename (RideData_YYYY-MM-DD_...); fall back to today.
+    // Prefer the track's own <name> from the ride GPX so segments default to
+    // the trail name the recorder saved. Fall back to the first point's
+    // timestamp, then a date embedded in the filename, then today.
+    const trkName = rideTrackNameForSeg(seg);
+    if (trkName) return trkName;
     let date = null;
     const ride = state.rideCache.get(seg.rideName);
     const firstTime = ride?.points?.[seg.indices[0]]?.time;

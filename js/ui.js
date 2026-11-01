@@ -130,14 +130,27 @@ function renderContentsPanel() {
 
     el.querySelectorAll('.contents-item').forEach(row => {
         row.tabIndex = 0;
+        // Manual double-click detection via click timing. The native 'dblclick'
+        // event was being eaten somewhere in the Leaflet/tooltip interaction, so
+        // we count clicks ourselves — the sidebar row is reliable DOM-only.
+        // A pending single-click action is held off until the window expires,
+        // and a second click within the window cancels it and runs rename.
+        let singleClickTimer = null;
         row.addEventListener('click', (e) => {
             if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
-            row.focus();
-            zoomToContentsItem(row.dataset.kind, +row.dataset.idx);
-        });
-        row.addEventListener('dblclick', (e) => {
-            if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
-            renameFeature(row.dataset.kind, +row.dataset.idx);
+            const kind = row.dataset.kind;
+            const idx = +row.dataset.idx;
+            if (singleClickTimer !== null) {
+                clearTimeout(singleClickTimer);
+                singleClickTimer = null;
+                renameFeature(kind, idx);
+                return;
+            }
+            singleClickTimer = setTimeout(() => {
+                singleClickTimer = null;
+                row.focus();
+                zoomToContentsItem(kind, idx);
+            }, 300);
         });
         row.addEventListener('keydown', (e) => rowNavKeydown(e, row, {
             onEnter: () => zoomToContentsItem(row.dataset.kind, +row.dataset.idx),
@@ -283,13 +296,77 @@ function renameFeature(kind, idx) {
     // instead of a name-only prompt, so users can fix everything from one place.
     if (kind === 'wpt') { editWaypoint(el); return; }
     const current = directChildText(el, 'name');
-    const next = prompt(`Rename ${kind}:`, current);
-    if (next === null) return;
-    const trimmed = next.trim();
-    if (trimmed === current) return;
-    pushHistory();
-    setDirectChild(el, 'name', trimmed);
-    refreshBaseAfterEdit(`Renamed to "${trimmed || '(unnamed)'}".`);
+    // Use an in-DOM modal instead of window.prompt — some browsers suppress
+    // the native prompt dialog, so renames silently did nothing.
+    showPromptModal({
+        title: `Rename ${kind}`,
+        label: 'Name',
+        value: current,
+        onSave: (next) => {
+            const trimmed = (next || '').trim();
+            if (trimmed === current) return;
+            pushHistory();
+            setDirectChild(el, 'name', trimmed);
+            refreshBaseAfterEdit(`Renamed to "${trimmed || '(unnamed)'}".`);
+        },
+    });
+}
+
+// Generic single-text-field modal. Uses the native <dialog> element so modal
+// semantics (focus trap, Escape handling, top-layer stacking) come from the
+// browser instead of being manually re-implemented with a div backdrop.
+function showPromptModal({title, label, value = '', onSave}) {
+    document.querySelectorAll('dialog.prompt-modal').forEach(d => {
+        try { d.close(); } catch (_) {}
+        d.remove();
+    });
+    const dialog = document.createElement('dialog');
+    dialog.className = 'prompt-modal';
+    dialog.innerHTML = `
+        <form method="dialog" class="prompt-form">
+            <div class="prompt-header">
+                <h2>${escapeHtml(title)}</h2>
+                <button type="button" class="prompt-close" aria-label="Close">×</button>
+            </div>
+            <div class="prompt-body">
+                <label class="prompt-label">${escapeHtml(label)}</label>
+                <input type="text" class="prompt-input" value="${escapeHtml(value)}">
+            </div>
+            <div class="prompt-footer">
+                <button type="button" class="prompt-cancel">Cancel</button>
+                <button type="submit" class="prompt-save">Save</button>
+            </div>
+        </form>
+    `;
+    document.body.appendChild(dialog);
+    const input = dialog.querySelector('.prompt-input');
+    const close = () => {
+        try { if (dialog.open) dialog.close(); } catch (_) {}
+        dialog.remove();
+    };
+    dialog.querySelector('.prompt-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const v = input.value;
+        close();
+        if (onSave) onSave(v);
+    });
+    dialog.querySelector('.prompt-close').addEventListener('click', close);
+    dialog.querySelector('.prompt-cancel').addEventListener('click', close);
+    // Native <dialog> fires 'cancel' when Escape is pressed; override so we also
+    // clean up the detached node and don't need to listen for keydowns globally.
+    dialog.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
+
+    if (typeof dialog.showModal === 'function') {
+        dialog.showModal();
+    } else {
+        // Older browsers: fall back to the browser prompt. Rare in 2026.
+        close();
+        const v = window.prompt(label, value);
+        if (v !== null && onSave) onSave(v);
+        return;
+    }
+    input.focus();
+    input.select();
 }
 
 // ---------- File ingestion & lists ----------
@@ -365,6 +442,8 @@ function renderBaseList() {
         row.appendChild(rm);
         row.addEventListener('dblclick', (e) => {
             if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
+            e.preventDefault();
+            e.stopPropagation();
             renameBaseFile(name);
         });
         row.addEventListener('keydown', (e) => rowNavKeydown(e, row, {
@@ -416,38 +495,42 @@ function addNewBaseGpx() {
 // used when Export downloads the file. No GPX content is changed.
 function renameBaseFile(oldName) {
     const suggested = oldName.replace(/\.gpx$/i, '');
-    const input = prompt('New filename (used on Export):', suggested);
-    if (input === null) return;
-    let clean = input.trim();
-    if (!clean) return;
-    if (!/\.gpx$/i.test(clean)) clean += '.gpx';
-    if (clean === oldName) return;
-    if (state.baseCache.has(clean)) {
-        alert(`A file named "${clean}" is already in the list.`);
-        return;
-    }
-    // Maps have no rename — rebuild preserving order and replace.
-    const rebuilt = new Map();
-    for (const [k, v] of state.baseCache) {
-        rebuilt.set(k === oldName ? clean : k, v);
-    }
-    state.baseCache = rebuilt;
-    if (state.visibleBaseNames.has(oldName)) {
-        state.visibleBaseNames.delete(oldName);
-        state.visibleBaseNames.add(clean);
-    }
-    if (state.activeBaseName === oldName) {
-        state.activeBaseName = clean;
-        // Refresh the "Active GPX" line to show the new name.
-        const entry = state.baseCache.get(clean);
-        const c = baseFeatureCounts(entry.xmlDoc);
-        document.getElementById('baseInfo').innerHTML =
-            `Active GPX: <b>${clean}</b> — ${c.trksegs} trkseg(s)` +
-            (c.rtes ? ` + ${c.rtes} route(s)` : '') +
-            `, ${entry.points.length} points`;
-    }
-    renderBaseList();
-    showStatus(`Renamed to "${clean}".`);
+    showPromptModal({
+        title: 'Rename file',
+        label: 'New filename (used on Export)',
+        value: suggested,
+        onSave: (input) => {
+            let clean = (input || '').trim();
+            if (!clean) return;
+            if (!/\.gpx$/i.test(clean)) clean += '.gpx';
+            if (clean === oldName) return;
+            if (state.baseCache.has(clean)) {
+                alert(`A file named "${clean}" is already in the list.`);
+                return;
+            }
+            // Maps have no rename — rebuild preserving order and replace.
+            const rebuilt = new Map();
+            for (const [k, v] of state.baseCache) {
+                rebuilt.set(k === oldName ? clean : k, v);
+            }
+            state.baseCache = rebuilt;
+            if (state.visibleBaseNames.has(oldName)) {
+                state.visibleBaseNames.delete(oldName);
+                state.visibleBaseNames.add(clean);
+            }
+            if (state.activeBaseName === oldName) {
+                state.activeBaseName = clean;
+                const entry = state.baseCache.get(clean);
+                const c = baseFeatureCounts(entry.xmlDoc);
+                document.getElementById('baseInfo').innerHTML =
+                    `Active GPX: <b>${clean}</b> — ${c.trksegs} trkseg(s)` +
+                    (c.rtes ? ` + ${c.rtes} route(s)` : '') +
+                    `, ${entry.points.length} points`;
+            }
+            renderBaseList();
+            showStatus(`Renamed to "${clean}".`);
+        },
+    });
 }
 
 function renderRideList() {
@@ -532,6 +615,8 @@ function setActiveBase(name) {
     // so we don't double-draw it.
     state.visibleBaseNames.delete(name);
     state.baseXmlDoc = entry.xmlDoc;
+    // Any track selection from the previous base points at a now-detached node.
+    state.selectedTrack = null;
     // Recompute from the doc so routes are included even if the cache entry
     // was built with the older trkseg-only ingest.
     state.basePoints = extractBasePoints(entry.xmlDoc);
@@ -929,6 +1014,22 @@ window.addEventListener('keydown', (e) => {
         }
         return;
     }
+    // Delete / Backspace removes the currently-selected base track or route.
+    // Only fires when no tool is active and focus isn't on a form field (the
+    // guard clause above already returned for inputs).
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (!state.activeTool && state.selectedTrack && state.baseXmlDoc) {
+            const el = state.selectedTrack;
+            const kind = el.localName;
+            const idx = [...state.baseXmlDoc.getElementsByTagName(kind)].indexOf(el);
+            if (idx !== -1) {
+                e.preventDefault();
+                state.selectedTrack = null;
+                removeContentsItem(kind, idx);
+            }
+        }
+        return;
+    }
 
     // Bare single-letter shortcuts. Toggle the same tool off if pressed again.
     const key = e.key.toLowerCase();
@@ -972,6 +1073,58 @@ for (const r of document.querySelectorAll('input[name="units"]')) {
     r.addEventListener('change', handler);
     r.addEventListener('click', handler);
 }
+
+// Draggable sidebar resizer. Width is persisted so a user who widens the
+// sidebar to read long track names keeps that layout on next load. The handle
+// is injected rather than baked into index.html so combine.html picks it up
+// automatically.
+(() => {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) return;
+    const SIDEBAR_WIDTH_KEY = 'gpxtools.sidebarWidth';
+    const MIN_W = 260;
+    const maxW = () => Math.max(MIN_W + 100, Math.round(window.innerWidth * 0.7));
+    const saved = parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY), 10);
+    if (Number.isFinite(saved) && window.innerWidth > 768) {
+        sidebar.style.width = Math.min(Math.max(saved, MIN_W), maxW()) + 'px';
+    }
+    const handle = document.createElement('div');
+    handle.id = 'sidebarResizer';
+    handle.title = 'Drag to resize sidebar';
+    sidebar.appendChild(handle);
+    let dragging = false;
+    const onMove = (e) => {
+        if (!dragging) return;
+        const w = Math.min(Math.max(e.clientX, MIN_W), maxW());
+        sidebar.style.width = w + 'px';
+        if (typeof map !== 'undefined' && map.invalidateSize) map.invalidateSize();
+    };
+    const onUp = () => {
+        if (!dragging) return;
+        dragging = false;
+        document.body.classList.remove('resizing-sidebar');
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        const px = parseInt(sidebar.style.width, 10);
+        if (Number.isFinite(px)) localStorage.setItem(SIDEBAR_WIDTH_KEY, String(px));
+    };
+    handle.addEventListener('mousedown', (e) => {
+        // Only resize on desktop — mobile uses the drawer overlay instead.
+        if (window.innerWidth <= 768) return;
+        e.preventDefault();
+        dragging = true;
+        document.body.classList.add('resizing-sidebar');
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+    });
+    // Double-click resets to the CSS default so a user who dragged too far
+    // can get back to a known-good width without hunting for the right pixel.
+    handle.addEventListener('dblclick', () => {
+        sidebar.style.width = '';
+        localStorage.removeItem(SIDEBAR_WIDTH_KEY);
+        if (typeof map !== 'undefined' && map.invalidateSize) map.invalidateSize();
+    });
+})();
 
 
 document.getElementById('clearMergedHistory').addEventListener('click', () => {
