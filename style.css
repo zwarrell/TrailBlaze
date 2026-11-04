@@ -695,6 +695,74 @@ dialog.prompt-modal::backdrop { background: rgba(0,0,0,0.5); }
     .prompt-footer .prompt-save:hover { background: #0052a3; }
 }
 
+/* ---------- Resample modal ---------- */
+dialog.resample-modal {
+    border: none; border-radius: 8px; padding: 0;
+    width: 520px; max-width: 94vw;
+    background: white; box-shadow: 0 6px 24px rgba(0,0,0,0.35);
+}
+dialog.resample-modal::backdrop { background: rgba(0,0,0,0.5); }
+.resample-form { display: flex; flex-direction: column; }
+.resample-body {
+    padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
+    max-height: 60vh; overflow: auto;
+}
+.resample-tol-row {
+    display: grid; grid-template-columns: auto 90px 1fr; gap: 8px; align-items: center;
+}
+.resample-tol-row label { font-size: 13px; color: #333; }
+.resample-tol-row input {
+    padding: 6px 8px; font-size: 13px;
+    border: 1px solid #ccc; border-radius: 4px; outline: none;
+}
+.resample-tol-row input:focus { border-color: #0066cc; }
+.resample-tol-hint { font-size: 11px; color: #777; }
+.resample-list-head {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: #555; font-weight: 600;
+    padding-top: 6px; border-top: 1px solid #eee;
+}
+.resample-list-head > span:first-child { flex: 1; }
+.resample-list-head .mini {
+    padding: 2px 8px; font-size: 11px;
+    border: 1px solid #ccc; border-radius: 3px; background: #f5f5f5; cursor: pointer;
+}
+.resample-list-head .mini:hover { background: #e8e8e8; }
+.resample-list { display: flex; flex-direction: column; gap: 2px; }
+.resample-row {
+    display: grid; grid-template-columns: auto 1fr auto auto;
+    gap: 8px; align-items: center;
+    padding: 4px 6px; border-radius: 4px; cursor: pointer;
+    font-size: 13px;
+}
+.resample-row:hover { background: #f5f5f5; }
+.resample-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resample-row-kind {
+    font-size: 10px; text-transform: uppercase;
+    color: #666; padding: 1px 6px; background: #eee; border-radius: 3px;
+}
+.resample-row-counts { font-size: 11px; color: #555; font-variant-numeric: tabular-nums; }
+.resample-totals {
+    font-size: 12px; color: #333; font-weight: 600; text-align: right;
+    padding-top: 6px; border-top: 1px solid #eee;
+}
+
+@media (prefers-color-scheme: dark) {
+    dialog.resample-modal { background: #262626; color: #eee; box-shadow: 0 6px 24px rgba(0,0,0,0.7); }
+    .resample-tol-row label { color: #ddd; }
+    .resample-tol-row input { background: #1a1a1a; color: #eee; border-color: #555; }
+    .resample-tol-row input:focus { border-color: #4a90d9; }
+    .resample-tol-hint { color: #999; }
+    .resample-list-head { color: #ccc; border-color: #444; }
+    .resample-list-head .mini { background: #333; color: #eee; border-color: #555; }
+    .resample-list-head .mini:hover { background: #444; }
+    .resample-row:hover { background: #333; }
+    .resample-row-kind { background: #3a3a3a; color: #ccc; }
+    .resample-row-counts { color: #bbb; }
+    .resample-totals { color: #eee; border-color: #444; }
+}
+
+
 /* ---------- Waypoint edit / add modal ---------- */
 .wpt-modal {
     position: fixed;

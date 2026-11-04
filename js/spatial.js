@@ -166,3 +166,50 @@ function ptLatLng(trkpt) {
         lon: parseFloat(trkpt.getAttribute('lon')),
     };
 }
+
+// ---------- Resampling ----------
+// Perpendicular distance in meters from point P to the line segment AB,
+// using an equirectangular projection centered on the segment midpoint. Good
+// to sub-meter accuracy at the scales GPX tracks cover.
+function perpDistanceM(p, a, b) {
+    const R = 6371000;
+    const toRad = d => d * Math.PI / 180;
+    const lat0 = toRad((a.lat + b.lat) / 2);
+    const scale = Math.cos(lat0);
+    const bx = (b.lon - a.lon) * scale * R * Math.PI / 180;
+    const by = (b.lat - a.lat) * R * Math.PI / 180;
+    const px = (p.lon - a.lon) * scale * R * Math.PI / 180;
+    const py = (p.lat - a.lat) * R * Math.PI / 180;
+    const lenSq = bx * bx + by * by;
+    if (lenSq === 0) return Math.hypot(px, py);
+    let t = (px * bx + py * by) / lenSq;
+    t = Math.max(0, Math.min(1, t));
+    const dxp = px - t * bx, dyp = py - t * by;
+    return Math.hypot(dxp, dyp);
+}
+
+// Iterative Douglas-Peucker. Returns a boolean keep[] array parallel to
+// points. First and last are always kept so endpoints anchor the track.
+function douglasPeuckerKeep(points, toleranceM) {
+    const n = points.length;
+    const keep = new Array(n).fill(false);
+    if (n === 0) return keep;
+    keep[0] = true;
+    keep[n - 1] = true;
+    if (n < 3) return keep;
+    const stack = [[0, n - 1]];
+    while (stack.length) {
+        const [a, b] = stack.pop();
+        let maxDist = -1, maxIdx = -1;
+        for (let i = a + 1; i < b; i++) {
+            const d = perpDistanceM(points[i], points[a], points[b]);
+            if (d > maxDist) { maxDist = d; maxIdx = i; }
+        }
+        if (maxDist > toleranceM && maxIdx !== -1) {
+            keep[maxIdx] = true;
+            stack.push([a, maxIdx]);
+            stack.push([maxIdx, b]);
+        }
+    }
+    return keep;
+}

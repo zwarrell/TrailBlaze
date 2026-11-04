@@ -1082,6 +1082,203 @@ function showWaypointModal({title, name = '', desc = '', cmt = '', sym = '',
     setTimeout(() => nameEl.focus(), 0);
 }
 
+// ---------- Resample ----------
+// Pick tracks/routes and a Douglas-Peucker tolerance, then rewrite each
+// selection's point list to a simplified polyline. Non-geometry children
+// (ele, time, extensions) on surviving points are preserved.
+function showResampleModal() {
+    if (!state.baseXmlDoc) { alert('Load a base GPX first.'); return; }
+    const doc = state.baseXmlDoc;
+    const trks = [...doc.getElementsByTagName('trk')];
+    const rtes = [...doc.getElementsByTagName('rte')];
+    if (!trks.length && !rtes.length) { alert('No tracks or routes to resample.'); return; }
+
+    // Build descriptors: {kind, el, name, points, ptNodes}.
+    const items = [];
+    for (const trk of trks) {
+        const name = directChildText(trk, 'name') || '(unnamed track)';
+        const pts = collectAllTrkpts(trk);
+        if (pts.length < 2) continue;
+        items.push({kind: 'trk', el: trk, name, ptNodes: pts});
+    }
+    for (const rte of rtes) {
+        const name = directChildText(rte, 'name') || '(unnamed route)';
+        const pts = [...rte.getElementsByTagName('rtept')];
+        if (pts.length < 2) continue;
+        items.push({kind: 'rte', el: rte, name, ptNodes: pts});
+    }
+    if (!items.length) { alert('No tracks or routes with enough points to resample.'); return; }
+
+    document.querySelectorAll('dialog.resample-modal').forEach(d => {
+        try { d.close(); } catch (_) {}
+        d.remove();
+    });
+    const dialog = document.createElement('dialog');
+    dialog.className = 'resample-modal';
+    const defaultTolM = 5; // meters — a conservative Douglas-Peucker threshold
+    const defaultTolDisp = state.units === 'imperial'
+        ? Math.round(defaultTolM * 3.28084)
+        : defaultTolM;
+    dialog.innerHTML = `
+        <form method="dialog" class="resample-form">
+            <div class="prompt-header">
+                <h2>Resample tracks</h2>
+                <button type="button" class="prompt-close" aria-label="Close">×</button>
+            </div>
+            <div class="resample-body">
+                <div class="resample-tol-row">
+                    <label for="rs-tol">Tolerance (${unitShort()})</label>
+                    <input type="number" id="rs-tol" min="0" step="any" value="${defaultTolDisp}">
+                    <span class="resample-tol-hint">Points within this distance of the simplified line are dropped.</span>
+                </div>
+                <div class="resample-list-head">
+                    <span>Tracks / routes</span>
+                    <button type="button" class="mini" data-rs-all>All</button>
+                    <button type="button" class="mini" data-rs-none>None</button>
+                </div>
+                <div class="resample-list" id="rs-list"></div>
+                <div class="resample-totals" id="rs-totals"></div>
+            </div>
+            <div class="prompt-footer">
+                <button type="button" class="prompt-cancel">Cancel</button>
+                <button type="submit" class="prompt-save">Resample</button>
+            </div>
+        </form>
+    `;
+    document.body.appendChild(dialog);
+    const listEl = dialog.querySelector('#rs-list');
+    const totalsEl = dialog.querySelector('#rs-totals');
+    const tolEl = dialog.querySelector('#rs-tol');
+
+    // Cache each item's lat/lon array once so preview math stays cheap.
+    for (const it of items) {
+        it.points = it.ptNodes.map(p => ({
+            lat: parseFloat(p.getAttribute('lat')),
+            lon: parseFloat(p.getAttribute('lon')),
+        })).filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon));
+    }
+
+    items.forEach((it, i) => {
+        const row = document.createElement('label');
+        row.className = 'resample-row';
+        row.innerHTML = `
+            <input type="checkbox" data-rs-idx="${i}" checked>
+            <span class="resample-row-name" title="${escapeHtml(it.name)}">${escapeHtml(it.name)}</span>
+            <span class="resample-row-kind">${it.kind}</span>
+            <span class="resample-row-counts" id="rs-count-${i}">${it.points.length} → ?</span>
+        `;
+        listEl.appendChild(row);
+    });
+
+    const tolMeters = () => {
+        const v = parseFloat(tolEl.value);
+        if (!Number.isFinite(v) || v < 0) return 0;
+        return state.units === 'imperial' ? v / 3.28084 : v;
+    };
+    const selectedIndices = () =>
+        [...listEl.querySelectorAll('input[type="checkbox"]')]
+            .filter(cb => cb.checked)
+            .map(cb => +cb.dataset.rsIdx);
+
+    const recomputePreview = () => {
+        const tol = tolMeters();
+        let before = 0, after = 0;
+        const sel = new Set(selectedIndices());
+        items.forEach((it, i) => {
+            const n = it.points.length;
+            const countEl = dialog.querySelector(`#rs-count-${i}`);
+            if (!sel.has(i)) {
+                if (countEl) countEl.textContent = `${n} → ${n} (skip)`;
+                before += n;
+                after += n;
+                return;
+            }
+            const keep = douglasPeuckerKeep(it.points, tol);
+            const kept = keep.reduce((a, k) => a + (k ? 1 : 0), 0);
+            if (countEl) countEl.textContent = `${n} → ${kept}`;
+            before += n;
+            after += kept;
+        });
+        totalsEl.textContent = `Total: ${before} → ${after} points (−${before - after})`;
+    };
+
+    listEl.addEventListener('change', recomputePreview);
+    tolEl.addEventListener('input', recomputePreview);
+    dialog.querySelector('[data-rs-all]').addEventListener('click', () => {
+        listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = true);
+        recomputePreview();
+    });
+    dialog.querySelector('[data-rs-none]').addEventListener('click', () => {
+        listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+        recomputePreview();
+    });
+
+    const close = () => {
+        try { if (dialog.open) dialog.close(); } catch (_) {}
+        dialog.remove();
+    };
+    dialog.querySelector('.prompt-close').addEventListener('click', close);
+    dialog.querySelector('.prompt-cancel').addEventListener('click', close);
+    dialog.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
+    dialog.querySelector('.resample-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const tol = tolMeters();
+        const sel = selectedIndices();
+        if (!sel.length) { close(); return; }
+        applyResample(items, sel, tol);
+        close();
+    });
+
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+    recomputePreview();
+}
+
+// Rewrite each selected item's trkpt/rtept list to the Douglas-Peucker-kept
+// subset. Done against the XML in one pushHistory snapshot so Undo rolls back
+// the whole resample.
+function applyResample(items, selectedIndices, toleranceM) {
+    pushHistory();
+    let totalBefore = 0, totalAfter = 0, touched = 0;
+    for (const i of selectedIndices) {
+        const it = items[i];
+        if (it.points.length < 3) continue;
+        const keep = douglasPeuckerKeep(it.points, toleranceM);
+        const kept = keep.reduce((a, k) => a + (k ? 1 : 0), 0);
+        if (kept === it.points.length) continue;
+        totalBefore += it.points.length;
+        totalAfter += kept;
+        touched++;
+        if (it.kind === 'trk') {
+            // Collapse any multi-trkseg track to a single trkseg of the kept
+            // points. Preserving multi-trkseg boundaries post-simplify would
+            // require per-seg DP, which users don't typically need.
+            const doc = state.baseXmlDoc;
+            for (const seg of [...it.el.getElementsByTagName('trkseg')]) {
+                seg.parentNode.removeChild(seg);
+            }
+            const trkseg = doc.createElementNS(GPX_NS, 'trkseg');
+            for (let k = 0; k < it.ptNodes.length; k++) {
+                if (!keep[k]) continue;
+                trkseg.appendChild(it.ptNodes[k].cloneNode(true));
+            }
+            it.el.appendChild(trkseg);
+        } else {
+            // Routes: drop <rtept> children that weren't kept.
+            for (let k = it.ptNodes.length - 1; k >= 0; k--) {
+                if (!keep[k]) it.el.removeChild(it.ptNodes[k]);
+            }
+        }
+    }
+    if (!touched) {
+        showStatus('Resample: nothing to simplify at that tolerance.');
+        return;
+    }
+    refreshBaseAfterEdit(
+        `Resampled ${touched} track${touched === 1 ? '' : 's'}: ${totalBefore} → ${totalAfter} points.`
+    );
+}
+
 function deleteWaypointEl(wptEl) {
     const name = directChildText(wptEl, 'name') || '(waypoint)';
     if (!confirm(`Delete waypoint "${name}"?`)) return;

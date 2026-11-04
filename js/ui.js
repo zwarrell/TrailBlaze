@@ -809,6 +809,7 @@ toolsControl.onAdd = () => {
                 <button data-tool="draw"   title="Draw — click map points to draw a new track (D)" aria-label="Draw tool (D)">✎ Draw</button>
                 <button data-tool="addwpt" title="Add waypoint — click a spot on the map to drop a waypoint (W)" aria-label="Add waypoint (W)">📍 Waypoint</button>
                 <button data-action="wptcoords" title="Add waypoint by coordinates — enter a lat/lon pair" aria-label="Add waypoint by coordinates">🧭 Wpt by coords</button>
+                <button data-action="resample" title="Resample — simplify selected tracks via Douglas-Peucker (R)" aria-label="Resample tracks (R)">📉 Resample</button>
             </div>
             <div class="tools-separator"></div>
             <div class="tools-group">
@@ -832,6 +833,7 @@ toolsControl.onAdd = () => {
             if (b.dataset.action === 'export')     return exportBase();
             if (b.dataset.action === 'fullscreen') return toggleFullscreen();
             if (b.dataset.action === 'wptcoords')  return addWaypointByCoords();
+            if (b.dataset.action === 'resample')   return showResampleModal();
             if (b.dataset.panel) return togglePanel(b.dataset.panel);
             const t = b.dataset.tool;
             if (t === 'done')   return commitCurrentTool();
@@ -1041,6 +1043,7 @@ window.addEventListener('keydown', (e) => {
         case 'e': e.preventDefault(); toggleTool('edit');   break;
         case 'd': e.preventDefault(); toggleTool('draw');   break;
         case 'w': e.preventDefault(); toggleTool('addwpt'); break;
+        case 'r': e.preventDefault(); if (typeof showResampleModal === 'function') showResampleModal(); break;
         case 'c': e.preventDefault(); if (typeof togglePanel === 'function') togglePanel('contents'); break;
         case 'v': e.preventDefault(); if (typeof togglePanel === 'function') togglePanel('compare');  break;
         case 'f': e.preventDefault(); toggleFullscreen(); break;
