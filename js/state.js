@@ -178,6 +178,11 @@ state.editPoints = []; // [{lat, lon, raw?}] — full editable copy of the track
 state.previewLayer = null;
 state.toolHistory = []; // snapshots of the current tool's point buffer for in-tool undo
 state.toolRedoStack = []; // paired redo for the in-tool history
+state.trackGraph = null; // lazy-built graph of base tracks for snap-routing
+state.drawRoutePreview = null; // L.polyline showing the pending draw-route path
+// Snap-to-tracks: on a draw click that falls on an existing track, route
+// along the track network (Dijkstra) rather than drawing a straight line.
+state.snapToTracksEnabled = localStorage.getItem('gpxtools.snapToTracks') !== '0';
 
 // Back-compat getters — existing code paths reference these.
 Object.defineProperty(state, 'splitMode', { get() { return this.activeTool === 'split'; } });

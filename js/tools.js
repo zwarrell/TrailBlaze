@@ -469,6 +469,7 @@ function setActiveTool(tool) {
     state.toolRedoStack = [];
     clearPreview();
     hideGhostPoint();
+    hideDrawRoutePreview();
 
     state.activeTool = tool;
 
@@ -502,7 +503,19 @@ function setActiveTool(tool) {
                 ? '<div class="hint">Click on the map to add points. Click Done in the tools panel when finished.</div>'
                 : '<div class="hint">Click a base track to select which end to extend.</div>';
         } else if (tool === 'draw') {
-            hint.innerHTML = '<div class="hint">Click on the map to add points. Click Done in the tools panel when finished.</div>';
+            const checked = state.snapToTracksEnabled ? 'checked' : '';
+            hint.innerHTML =
+                `<div class="hint">Click on the map to add points. Click Done in the tools panel when finished.</div>
+                 <label class="draw-snap-toggle">
+                   <input type="checkbox" id="drawSnapToggle" ${checked}>
+                   Snap to existing tracks (route along network)
+                 </label>`;
+            const cb = document.getElementById('drawSnapToggle');
+            if (cb) cb.addEventListener('change', () => {
+                state.snapToTracksEnabled = cb.checked;
+                localStorage.setItem('gpxtools.snapToTracks', cb.checked ? '1' : '0');
+                hideDrawRoutePreview();
+            });
         } else if (tool === 'split') {
             hint.innerHTML = '<div class="hint">Click on a base track or new segment to split it there.</div>';
         } else if (tool === 'edit') {
@@ -1304,9 +1317,16 @@ map.on('click', (e) => {
         updateUndoButton();
     } else if (state.activeTool === 'draw') {
         snapshotToolState();
-        const snap = findSnap(e.latlng);
-        const p = snap || e.latlng;
-        state.drawPoints.push({lat: p.lat, lon: p.lng});
+        const appended = appendDrawPointWithOptionalRouting(e.latlng);
+        if (!appended) {
+            // Prefer the graph-node snap so first-click still anchors on a
+            // track even without compare having built state.baseGrid.
+            const nodeSnap = state.snapToTracksEnabled ? findSnapNode(e.latlng) : null;
+            const snap = nodeSnap ? nodeSnap.latlng : findSnap(e.latlng);
+            const p = snap || e.latlng;
+            state.drawPoints.push({lat: p.lat, lon: p.lng ?? p.lon});
+        }
+        hideDrawRoutePreview();
         updateDrawPreview();
         updateUndoButton();
     } else if (state.activeTool === 'addwpt') {
@@ -1330,12 +1350,87 @@ map.on('click', (e) => {
     }
 });
 
+// If snap-to-tracks is on and both the previous draw point and the new click
+// anchor on graph nodes, splice in the Dijkstra path between them. Returns
+// true if a routed append happened — caller falls back to a straight-line
+// append on false.
+function appendDrawPointWithOptionalRouting(latlng) {
+    if (!state.snapToTracksEnabled) return false;
+    if (!state.drawPoints.length) return false;
+    const target = findSnapNode(latlng);
+    if (!target) return false;
+    const prev = state.drawPoints[state.drawPoints.length - 1];
+    const prevSnap = findSnapNode(L.latLng(prev.lat, prev.lon));
+    if (!prevSnap) return false;
+    const path = shortestPathOnTracks(prevSnap.idx, target.idx);
+    if (!path || path.length < 2) return false;
+    const nodes = state.trackGraph.nodes;
+    const routed = path.map(i => ({lat: nodes[i].lat, lon: nodes[i].lon}));
+    // Thin the routed segment so the drawn line is less dense than the source
+    // track it followed — dense source vertices on nearly-straight stretches
+    // collapse to the chord.
+    const keep = douglasPeuckerKeep(routed, DRAW_ROUTE_SIMPLIFY_M);
+    const thinned = routed.filter((_, i) => keep[i]);
+    state.drawPoints[state.drawPoints.length - 1] = thinned[0];
+    for (let i = 1; i < thinned.length; i++) state.drawPoints.push(thinned[i]);
+    return true;
+}
+
+// Dashed preview showing where the next draw click will land when routed
+// along the track network. Nulled out when the hover doesn't satisfy the
+// routing conditions.
+function showDrawRoutePreview(latlngs) {
+    if (state.drawRoutePreview) {
+        state.drawRoutePreview.setLatLngs(latlngs);
+    } else {
+        state.drawRoutePreview = L.polyline(latlngs, {
+            color: '#22c55e',
+            weight: 4,
+            opacity: 0.6,
+            dashArray: '6 6',
+            interactive: false,
+        }).addTo(map);
+    }
+}
+function hideDrawRoutePreview() {
+    if (state.drawRoutePreview) {
+        map.removeLayer(state.drawRoutePreview);
+        state.drawRoutePreview = null;
+    }
+}
+
 // Snap-preview ghost while drawing/extending so users see when their next
 // click will lock to a base track; also a split-candidate ghost so they can
 // hover near (not on) a track and see where the split will land.
 map.on('mousemove', (e) => {
     const t = state.activeTool;
-    if (t === 'draw' || (t === 'extend' && state.extendTarget)) {
+    if (t === 'draw') {
+        // Try route preview first (prev point on-graph AND hover on-graph).
+        let routed = false;
+        if (state.snapToTracksEnabled && state.drawPoints.length) {
+            const target = findSnapNode(e.latlng);
+            if (target) {
+                const prev = state.drawPoints[state.drawPoints.length - 1];
+                const prevSnap = findSnapNode(L.latLng(prev.lat, prev.lon));
+                if (prevSnap) {
+                    const path = shortestPathOnTracks(prevSnap.idx, target.idx);
+                    if (path && path.length >= 2) {
+                        const nodes = state.trackGraph.nodes;
+                        showDrawRoutePreview(path.map(i => [nodes[i].lat, nodes[i].lon]));
+                        showGhostPoint(target.latlng);
+                        routed = true;
+                    }
+                }
+            }
+        }
+        if (!routed) {
+            hideDrawRoutePreview();
+            const nodeSnap = state.snapToTracksEnabled ? findSnapNode(e.latlng) : null;
+            const snap = nodeSnap ? nodeSnap.latlng : findSnap(e.latlng);
+            if (snap) showGhostPoint(snap);
+            else hideGhostPoint();
+        }
+    } else if (t === 'extend' && state.extendTarget) {
         const snap = findSnap(e.latlng);
         if (snap) showGhostPoint(snap);
         else hideGhostPoint();

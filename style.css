@@ -226,6 +226,12 @@ button.mini.active:hover:not(:disabled) { background: #15803d; }
 #map.extend-mode { cursor: crosshair !important; }
 #map.extend-mode .leaflet-interactive { cursor: pointer !important; }
 #map.draw-mode   { cursor: crosshair !important; }
+/* In draw mode the draw tool owns every click — swallow pointer events on
+   every rendered track/waypoint SVG so clicks fall straight through to the
+   map. The draw tool's own markers live in the marker pane (HTML divIcons),
+   not the SVG pane, so they stay interactive. */
+#map.draw-mode .leaflet-pane.basePane,
+#map.draw-mode .leaflet-overlay-pane { pointer-events: none; }
 #map.edit-mode   { cursor: pointer !important; }
 #map.edit-mode .leaflet-interactive { cursor: pointer !important; }
 
@@ -762,6 +768,16 @@ dialog.resample-modal::backdrop { background: rgba(0,0,0,0.5); }
     .resample-totals { color: #eee; border-color: #444; }
 }
 
+/* ---------- Draw-mode snap-to-tracks toggle ---------- */
+.draw-snap-toggle {
+    display: flex; align-items: center; gap: 6px;
+    margin-top: 6px; font-size: 12px; color: #333; cursor: pointer;
+    user-select: none;
+}
+.draw-snap-toggle input { margin: 0; }
+@media (prefers-color-scheme: dark) {
+    .draw-snap-toggle { color: #ddd; }
+}
 
 /* ---------- Waypoint edit / add modal ---------- */
 .wpt-modal {
