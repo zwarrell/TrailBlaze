@@ -128,8 +128,16 @@ h1 { font-size: 18px; margin: 0 0 8px 0; }
     display: flex;
     gap: 12px;
     flex-wrap: wrap;
+    align-items: center;
 }
 #settingsModal .shortcuts-row { align-items: flex-start; }
+#settingsModal .snap-input { width: 80px; padding: 4px 6px; font-size: 13px; }
+#settingsModal .snap-unit { font-size: 12px; color: #666; min-width: 14px; }
+#settingsModal .snap-hint { font-size: 11px; color: #777; flex-basis: 100%; margin-top: 2px; }
+@media (prefers-color-scheme: dark) {
+    #settingsModal .snap-unit { color: #bbb; }
+    #settingsModal .snap-hint { color: #999; }
+}
 #settingsModal .shortcuts-row .setting-value { display: block; }
 .shortcuts-table {
     border-collapse: collapse;
@@ -226,12 +234,12 @@ button.mini.active:hover:not(:disabled) { background: #15803d; }
 #map.extend-mode { cursor: crosshair !important; }
 #map.extend-mode .leaflet-interactive { cursor: pointer !important; }
 #map.draw-mode   { cursor: crosshair !important; }
-/* In draw mode the draw tool owns every click — swallow pointer events on
-   every rendered track/waypoint SVG so clicks fall straight through to the
-   map. The draw tool's own markers live in the marker pane (HTML divIcons),
-   not the SVG pane, so they stay interactive. */
-#map.draw-mode .leaflet-pane.basePane,
-#map.draw-mode .leaflet-overlay-pane { pointer-events: none; }
+/* Keep polylines interactive in draw mode so hover tooltips still fire —
+   just show the crosshair instead of Leaflet's default pointer so the user
+   knows a click here will add a draw point, not select the track. The
+   click handlers in render.js fall through to the map/draw handler in
+   draw mode. */
+#map.draw-mode .leaflet-interactive { cursor: crosshair !important; }
 #map.edit-mode   { cursor: pointer !important; }
 #map.edit-mode .leaflet-interactive { cursor: pointer !important; }
 
@@ -618,6 +626,24 @@ body.contents-active #legend { display: none; }
     0%   { background: #ffd54a; }
     100% { background: transparent; }
 }
+/* Emoji waypoint badge. Leaflet's divIcon default has a white background and
+   border we want gone — the inner .wpt-icon carries the ring color. */
+.leaflet-div-icon.wpt-div-icon,
+.wpt-div-icon { background: transparent; border: none; }
+.wpt-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.92);
+    border: 2px solid #0066cc;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    line-height: 1;
+    pointer-events: auto;
+}
+
 .wpt-popup-actions { margin-top: 6px; }
 .wpt-popup-actions button {
     padding: 3px 8px;
@@ -769,14 +795,17 @@ dialog.resample-modal::backdrop { background: rgba(0,0,0,0.5); }
 }
 
 /* ---------- Draw-mode snap-to-tracks toggle ---------- */
-.draw-snap-toggle {
-    display: flex; align-items: center; gap: 6px;
-    margin-top: 6px; font-size: 12px; color: #333; cursor: pointer;
-    user-select: none;
+.draw-mode-group {
+    display: flex; flex-direction: column; gap: 3px; margin-top: 6px;
 }
-.draw-snap-toggle input { margin: 0; }
+.draw-mode-opt {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: #333; cursor: pointer; user-select: none;
+    margin: 0;
+}
+.draw-mode-opt input { margin: 0; }
 @media (prefers-color-scheme: dark) {
-    .draw-snap-toggle { color: #ddd; }
+    .draw-mode-opt { color: #ddd; }
 }
 
 /* ---------- Waypoint edit / add modal ---------- */

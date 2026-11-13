@@ -503,18 +503,28 @@ function setActiveTool(tool) {
                 ? '<div class="hint">Click on the map to add points. Click Done in the tools panel when finished.</div>'
                 : '<div class="hint">Click a base track to select which end to extend.</div>';
         } else if (tool === 'draw') {
-            const checked = state.snapToTracksEnabled ? 'checked' : '';
+            const chkFollow   = state.drawMode === 'follow'   ? 'checked' : '';
+            const chkStraight = state.drawMode === 'straight' ? 'checked' : '';
             hint.innerHTML =
                 `<div class="hint">Click on the map to add points. Click Done in the tools panel when finished.</div>
-                 <label class="draw-snap-toggle">
-                   <input type="checkbox" id="drawSnapToggle" ${checked}>
-                   Snap to existing tracks (route along network)
-                 </label>`;
-            const cb = document.getElementById('drawSnapToggle');
-            if (cb) cb.addEventListener('change', () => {
-                state.snapToTracksEnabled = cb.checked;
-                localStorage.setItem('gpxtools.snapToTracks', cb.checked ? '1' : '0');
-                hideDrawRoutePreview();
+                 <div class="draw-mode-group">
+                   <label class="draw-mode-opt">
+                     <input type="radio" name="drawMode" value="follow" ${chkFollow}>
+                     Follow tracks (shortest path along existing lines)
+                   </label>
+                   <label class="draw-mode-opt">
+                     <input type="radio" name="drawMode" value="straight" ${chkStraight}>
+                     Straight line (point-to-point)
+                   </label>
+                 </div>`;
+            document.querySelectorAll('input[name="drawMode"]').forEach(r => {
+                r.addEventListener('change', () => {
+                    if (!r.checked) return;
+                    state.drawMode = r.value;
+                    localStorage.setItem('gpxtools.drawMode', r.value);
+                    hideDrawRoutePreview();
+                    hideGhostPoint();
+                });
             });
         } else if (tool === 'split') {
             hint.innerHTML = '<div class="hint">Click on a base track or new segment to split it there.</div>';
@@ -1317,14 +1327,17 @@ map.on('click', (e) => {
         updateUndoButton();
     } else if (state.activeTool === 'draw') {
         snapshotToolState();
-        const appended = appendDrawPointWithOptionalRouting(e.latlng);
-        if (!appended) {
-            // Prefer the graph-node snap so first-click still anchors on a
-            // track even without compare having built state.baseGrid.
-            const nodeSnap = state.snapToTracksEnabled ? findSnapNode(e.latlng) : null;
-            const snap = nodeSnap ? nodeSnap.latlng : findSnap(e.latlng);
-            const p = snap || e.latlng;
-            state.drawPoints.push({lat: p.lat, lon: p.lng ?? p.lon});
+        if (state.drawMode === 'straight') {
+            // Pure point-to-point — no snapping at all, user controls every vertex.
+            state.drawPoints.push({lat: e.latlng.lat, lon: e.latlng.lng});
+        } else {
+            const appended = appendDrawPointWithOptionalRouting(e.latlng);
+            if (!appended) {
+                const nodeSnap = findSnapNode(e.latlng);
+                const snap = nodeSnap ? nodeSnap.latlng : findSnap(e.latlng);
+                const p = snap || e.latlng;
+                state.drawPoints.push({lat: p.lat, lon: p.lng ?? p.lon});
+            }
         }
         hideDrawRoutePreview();
         updateDrawPreview();
@@ -1350,29 +1363,64 @@ map.on('click', (e) => {
     }
 });
 
-// If snap-to-tracks is on and both the previous draw point and the new click
-// anchor on graph nodes, splice in the Dijkstra path between them. Returns
-// true if a routed append happened — caller falls back to a straight-line
-// append on false.
+// Decide what to do when the user clicks or hovers in draw mode with snap-
+// to-tracks on. Returns {kind, routedNodes, jumpTo} where kind is:
+//   'route'    — direct Dijkstra path, within the straight-line ratio
+//   'chase'    — Dijkstra to the best-exit node, then straight jump to target
+//   'straight' — no useful chase; one straight segment from prev to target
+// Shared between the click handler and the mousemove preview so both stay
+// in sync.
+function planDrawRoute(prevSnap, target) {
+    const g = state.trackGraph;
+    if (!g) return null;
+    const nodes = g.nodes;
+    const r = shortestPathsFrom(prevSnap.idx);
+    if (!r) return null;
+    // Follow-tracks mode trusts Dijkstra — if a path exists in the graph we
+    // use it no matter how long. The user explicitly asked for a "follow the
+    // line" mode, and tuning the junction/bridge thresholds (settings) is how
+    // they control how connected the graph is. Straight-line fallback only
+    // kicks in when the network is genuinely disconnected.
+    if (r.dist[target.idx] !== Infinity) {
+        return {kind: 'route', routedNodes: reconstructPath(r.prev, target.idx), jumpTo: null};
+    }
+    const targetLatLng = L.latLng(nodes[target.idx].lat, nodes[target.idx].lon);
+    const exit = bestChaseExitTowards(prevSnap.idx, targetLatLng);
+    const jumpTo = {lat: nodes[target.idx].lat, lon: nodes[target.idx].lon};
+    if (exit && exit.exitIdx !== prevSnap.idx && exit.path.length >= 2) {
+        return {kind: 'chase', routedNodes: exit.path, jumpTo};
+    }
+    return {kind: 'straight', routedNodes: null, jumpTo};
+}
+
+// On click: materialize whatever planDrawRoute returned into drawPoints.
+// Returns true when we fully handled the click (routed, chased, or jumped);
+// the caller only does its own straight-line append on false.
 function appendDrawPointWithOptionalRouting(latlng) {
-    if (!state.snapToTracksEnabled) return false;
+    if (state.drawMode !== 'follow') return false;
     if (!state.drawPoints.length) return false;
     const target = findSnapNode(latlng);
     if (!target) return false;
     const prev = state.drawPoints[state.drawPoints.length - 1];
     const prevSnap = findSnapNode(L.latLng(prev.lat, prev.lon));
     if (!prevSnap) return false;
-    const path = shortestPathOnTracks(prevSnap.idx, target.idx);
-    if (!path || path.length < 2) return false;
+    const plan = planDrawRoute(prevSnap, target);
+    if (!plan) return false;
     const nodes = state.trackGraph.nodes;
-    const routed = path.map(i => ({lat: nodes[i].lat, lon: nodes[i].lon}));
+    if (plan.kind === 'straight') {
+        state.drawPoints[state.drawPoints.length - 1] = {lat: nodes[prevSnap.idx].lat, lon: nodes[prevSnap.idx].lon};
+        state.drawPoints.push(plan.jumpTo);
+        return true;
+    }
     // Thin the routed segment so the drawn line is less dense than the source
     // track it followed — dense source vertices on nearly-straight stretches
     // collapse to the chord.
+    const routed = plan.routedNodes.map(i => ({lat: nodes[i].lat, lon: nodes[i].lon}));
     const keep = douglasPeuckerKeep(routed, DRAW_ROUTE_SIMPLIFY_M);
     const thinned = routed.filter((_, i) => keep[i]);
     state.drawPoints[state.drawPoints.length - 1] = thinned[0];
     for (let i = 1; i < thinned.length; i++) state.drawPoints.push(thinned[i]);
+    if (plan.jumpTo) state.drawPoints.push(plan.jumpTo);
     return true;
 }
 
@@ -1405,18 +1453,35 @@ function hideDrawRoutePreview() {
 map.on('mousemove', (e) => {
     const t = state.activeTool;
     if (t === 'draw') {
+        // Straight-line mode: no snap, no preview, no ghost — the next click
+        // lands exactly where the cursor is.
+        if (state.drawMode === 'straight') {
+            hideDrawRoutePreview();
+            hideGhostPoint();
+            return;
+        }
         // Try route preview first (prev point on-graph AND hover on-graph).
         let routed = false;
-        if (state.snapToTracksEnabled && state.drawPoints.length) {
+        if (state.drawPoints.length) {
             const target = findSnapNode(e.latlng);
             if (target) {
                 const prev = state.drawPoints[state.drawPoints.length - 1];
                 const prevSnap = findSnapNode(L.latLng(prev.lat, prev.lon));
                 if (prevSnap) {
-                    const path = shortestPathOnTracks(prevSnap.idx, target.idx);
-                    if (path && path.length >= 2) {
+                    const plan = planDrawRoute(prevSnap, target);
+                    if (plan) {
                         const nodes = state.trackGraph.nodes;
-                        showDrawRoutePreview(path.map(i => [nodes[i].lat, nodes[i].lon]));
+                        if (plan.kind === 'route') {
+                            showDrawRoutePreview(plan.routedNodes.map(i => [nodes[i].lat, nodes[i].lon]));
+                        } else if (plan.kind === 'chase') {
+                            // Chase segment plus the jump tail — one polyline so
+                            // the user sees the whole move.
+                            const latlngs = plan.routedNodes.map(i => [nodes[i].lat, nodes[i].lon]);
+                            if (plan.jumpTo) latlngs.push([plan.jumpTo.lat, plan.jumpTo.lon]);
+                            showDrawRoutePreview(latlngs);
+                        } else {
+                            hideDrawRoutePreview();
+                        }
                         showGhostPoint(target.latlng);
                         routed = true;
                     }
@@ -1425,7 +1490,10 @@ map.on('mousemove', (e) => {
         }
         if (!routed) {
             hideDrawRoutePreview();
-            const nodeSnap = state.snapToTracksEnabled ? findSnapNode(e.latlng) : null;
+            // Follow mode but no route plan yet (e.g. no drawn points yet) —
+            // show a ghost at the nearest graph node so the first click still
+            // anchors on a track.
+            const nodeSnap = findSnapNode(e.latlng);
             const snap = nodeSnap ? nodeSnap.latlng : findSnap(e.latlng);
             if (snap) showGhostPoint(snap);
             else hideGhostPoint();

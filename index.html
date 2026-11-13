@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TrailBlaze</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="style.css?v=20261104d">
+<link rel="stylesheet" href="style.css?v=20261113a">
 </head>
 <body>
 <button id="mobileMenuToggle" title="Menu" aria-label="Open menu">☰</button>
@@ -24,6 +24,22 @@
                 <div class="setting-value">
                     <label class="unit-opt"><input type="radio" name="units" value="imperial"> Imperial</label>
                     <label class="unit-opt"><input type="radio" name="units" value="metric"> Metric</label>
+                </div>
+            </div>
+            <div class="setting-row">
+                <label class="setting-label" for="setSnapJunction">Draw snap: junction</label>
+                <div class="setting-value">
+                    <input type="number" id="setSnapJunction" class="snap-input" min="0" step="1">
+                    <span class="snap-unit" id="snapJunctionUnit">m</span>
+                    <span class="snap-hint">A vertex within this of another track's line becomes a shared junction.</span>
+                </div>
+            </div>
+            <div class="setting-row">
+                <label class="setting-label" for="setSnapBridge">Draw snap: bridge</label>
+                <div class="setting-value">
+                    <input type="number" id="setSnapBridge" class="snap-input" min="0" step="1">
+                    <span class="snap-unit" id="snapBridgeUnit">m</span>
+                    <span class="snap-hint">Max gap to bridge across two tracks' dangling endpoints.</span>
                 </div>
             </div>
             <div class="setting-row shortcuts-row">
@@ -155,13 +171,13 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/esri-leaflet@3.0.14/dist/esri-leaflet.js"></script>
-<script src="js/config.js?v=20261104d"></script>
-<script src="js/state.js?v=20261104d"></script>
-<script src="js/gpx.js?v=20261104d"></script>
-<script src="js/spatial.js?v=20261104d"></script>
-<script src="js/render.js?v=20261104d"></script>
-<script src="js/compare.js?v=20261104d"></script>
-<script src="js/tools.js?v=20261104d"></script>
-<script src="js/ui.js?v=20261104d"></script>
+<script src="js/config.js?v=20261113a"></script>
+<script src="js/state.js?v=20261113a"></script>
+<script src="js/gpx.js?v=20261113a"></script>
+<script src="js/spatial.js?v=20261113a"></script>
+<script src="js/render.js?v=20261113a"></script>
+<script src="js/compare.js?v=20261113a"></script>
+<script src="js/tools.js?v=20261113a"></script>
+<script src="js/ui.js?v=20261113a"></script>
 </body>
 </html>

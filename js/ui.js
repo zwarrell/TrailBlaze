@@ -610,6 +610,12 @@ function rowNavKeydown(e, row, {onEnter, onDelete}) {
 function setActiveBase(name) {
     const entry = state.baseCache.get(name);
     if (!entry) return;
+    // Switching the active radio shouldn't make the old file vanish — promote
+    // it to the overlay set so it keeps showing in the lighter overlay style.
+    const prev = state.activeBaseName;
+    if (prev && prev !== name && state.baseCache.has(prev)) {
+        state.visibleBaseNames.add(prev);
+    }
     state.activeBaseName = name;
     // Newly-active file is always fully rendered — strip it from the overlay set
     // so we don't double-draw it.
@@ -782,7 +788,42 @@ function applyUnits(newUnits, {convertInputs}) {
     renderSegList();
     renderRideList();
     updateStats();
+    if (typeof populateSnapInputs === 'function') populateSnapInputs();
 }
+
+// Snap-draw settings: the three inputs in the settings modal. Internal
+// state is always meters; display converts for imperial. Any change
+// invalidates the track graph so the next hover rebuilds with new tunings.
+function populateSnapInputs() {
+    const ju = document.getElementById('setSnapJunction');
+    const bu = document.getElementById('setSnapBridge');
+    const juUnit = document.getElementById('snapJunctionUnit');
+    const buUnit = document.getElementById('snapBridgeUnit');
+    if (!ju || !bu) return;
+    const mToDisp = m => state.units === 'imperial' ? Math.round(m * 3.28084) : Math.round(m);
+    ju.value = mToDisp(snapJunctionM());
+    bu.value = mToDisp(snapBridgeM());
+    if (juUnit) juUnit.textContent = unitShort();
+    if (buUnit) buUnit.textContent = unitShort();
+}
+(() => {
+    const ju = document.getElementById('setSnapJunction');
+    const bu = document.getElementById('setSnapBridge');
+    if (!ju || !bu) return;
+    const inputMeters = (el, defaultM) => {
+        const v = parseFloat(el.value);
+        if (!Number.isFinite(v) || v < 0) return defaultM;
+        return state.units === 'imperial' ? v / 3.28084 : v;
+    };
+    const commit = () => {
+        state.snapJunctionM = inputMeters(ju, 20);
+        state.snapBridgeM   = inputMeters(bu, 60);
+        localStorage.setItem('gpxtools.snapJunctionM', String(state.snapJunctionM));
+        localStorage.setItem('gpxtools.snapBridgeM',   String(state.snapBridgeM));
+        state.trackGraph = null;
+    };
+    for (const el of [ju, bu]) el.addEventListener('change', commit);
+})();
 
 // Simple mode: skip the tools panel and lock the compare panel open. This lets
 // simple.html be a stable minimal build while index.html iterates.
@@ -903,7 +944,11 @@ document.addEventListener('fullscreenchange', () => {
     const openBtn = document.getElementById('settingsToggle');
     const closeBtn = modal?.querySelector('.modal-close');
     const backdrop = modal?.querySelector('.modal-backdrop');
-    const openModal  = () => { if (modal) modal.removeAttribute('hidden'); if (openBtn) openBtn.classList.add('active'); };
+    const openModal  = () => {
+        if (modal) modal.removeAttribute('hidden');
+        if (openBtn) openBtn.classList.add('active');
+        populateSnapInputs();
+    };
     const closeModal = () => { if (modal) modal.setAttribute('hidden', ''); if (openBtn) openBtn.classList.remove('active'); };
     if (openBtn)  openBtn.addEventListener('click', openModal);
     if (closeBtn) closeBtn.addEventListener('click', closeModal);

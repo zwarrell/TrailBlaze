@@ -3,6 +3,109 @@
 // fitting, hover/flash helpers, transient status text, and the track-stats
 // popup content.
 
+// Mapping from GPX <sym>/<type> text to an emoji glyph. Keys are lowercased
+// and whitespace/punctuation-insensitive. Covers Garmin's Mapsource symbol
+// set, TrailTech Voyager, and common free-form OSM/OsmAnd types.
+const WPT_SYMBOL_EMOJI = (() => {
+    const entries = [
+        [['summit', 'peak', 'mountain', 'mountain peak'], '⛰️'],
+        [['camp', 'camping', 'campground', 'campsite', 'tent'], '🏕️'],
+        [['rv', 'rv park', 'rv-park', 'trailerpark', 'trailer park'], '🚐'],
+        [['parking', 'parking area', 'trailhead parking'], '🅿️'],
+        [['trailhead', 'trail head'], '🥾'],
+        [['water', 'water source', 'drinking water', 'spring', 'well'], '💧'],
+        [['waterfall', 'falls'], '💦'],
+        [['scenic area', 'scenic view', 'scenic', 'viewpoint', 'overlook'], '🌄'],
+        [['fishing', 'fishing area', 'fish'], '🎣'],
+        [['boat', 'boat ramp', 'marina', 'anchor'], '⚓️'],
+        [['picnic', 'picnic area'], '🧺'],
+        [['food', 'restaurant', 'diner', 'fast food'], '🍽️'],
+        [['bar', 'drinks'], '🍻'],
+        [['coffee', 'cafe'], '☕️'],
+        [['gas', 'gas station', 'fuel'], '⛽️'],
+        [['lodging', 'hotel', 'motel', 'inn', 'hostel'], '🏨'],
+        [['home', 'house', 'residence'], '🏠'],
+        [['shopping', 'shop', 'store', 'supermarket', 'grocery'], '🛒'],
+        [['phone', 'telephone'], '📞'],
+        [['car', 'parking lot'], '🚗'],
+        [['bike', 'bike trail', 'bicycle', 'cycling'], '🚴'],
+        [['atv', 'off road', 'off-road', 'motorcycle', 'motor', 'ohv'], '🏍️'],
+        [['hiking', 'hike', 'walking'], '🥷'],
+        [['horse', 'horseback', 'equestrian'], '🐎'],
+        [['snowmobile', 'snow'], '🎿'],
+        [['restrooms', 'restroom', 'toilet', 'toilets'], '🚻'],
+        [['danger', 'hazard', 'warning', 'caution'], '⚠️'],
+        [['gate', 'closed'], '🚧'],
+        [['bridge'], '🌉'],
+        [['tunnel', 'cave'], '🕳️'],
+        [['mine', 'mining'], '⛏️'],
+        [['forest', 'tree', 'woods'], '🌲'],
+        [['info', 'information'], 'ℹ️'],
+        [['pin', 'waypoint', 'marker', 'location'], '📍'],
+        [['star', 'favorite', 'favourite'], '⭐️'],
+        [['flag', 'flag, red', 'flag, blue', 'flag, green', 'checkered flag'], '🚩'],
+        [['camera', 'photo', 'picture'], '📷'],
+        [['first aid', 'medical', 'hospital'], '⚕️'],
+        [['fire', 'campfire'], '🔥'],
+        [['skull', 'cemetery', 'graveyard'], '💀'],
+        [['airport', 'airplane'], '✈️'],
+        [['train', 'rail', 'railway', 'station'], '🚆'],
+        [['bus', 'bus stop'], '🚌'],
+        [['anchor', 'harbor'], '⚓️'],
+    ];
+    const map = new Map();
+    for (const [keys, glyph] of entries) {
+        for (const k of keys) map.set(k, glyph);
+    }
+    return map;
+})();
+
+// Normalize a <sym>/<type> string for emoji lookup. Keeps letters and spaces,
+// collapses whitespace, lowercases — so "Scenic Area", "scenic-area", and
+// "SCENIC_AREA" all resolve to the same key.
+function wptSymbolKey(s) {
+    if (!s) return '';
+    return s.toString()
+        .toLowerCase()
+        .replace(/[_\-]+/g, ' ')
+        .replace(/[^a-z0-9 ,]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+// Return an emoji glyph for a GPX waypoint's <sym>/<type>, or null when no
+// known symbol is declared. Checks sym first, then falls back to type.
+function wptSymbolEmoji(wpt) {
+    const sym = directChildText(wpt, 'sym');
+    const type = directChildText(wpt, 'type');
+    for (const raw of [sym, type]) {
+        if (!raw) continue;
+        const key = wptSymbolKey(raw);
+        if (!key) continue;
+        if (WPT_SYMBOL_EMOJI.has(key)) return WPT_SYMBOL_EMOJI.get(key);
+        // "Flag, Red" style keys often share the leading noun — try the first word.
+        const first = key.split(/[ ,]/)[0];
+        if (first && WPT_SYMBOL_EMOJI.has(first)) return WPT_SYMBOL_EMOJI.get(first);
+    }
+    return null;
+}
+
+// Build a Leaflet divIcon that pairs an emoji with the waypoint's color ring.
+// `scale` shrinks the badge for overlay (non-active) waypoints.
+function wptDivIcon(emoji, color, scale) {
+    const size = Math.round(28 * scale);
+    const font = Math.round(16 * scale);
+    const html =
+        `<div class="wpt-icon" style="width:${size}px;height:${size}px;` +
+        `font-size:${font}px;border-color:${color};">${emoji}</div>`;
+    return L.divIcon({
+        className: 'wpt-div-icon',
+        html,
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2],
+    });
+}
+
 // ---------- Rendering ----------
 function drawBase() {
     if (state.baseLayer) {
@@ -49,8 +152,11 @@ function drawBase() {
         // click-pair detection. Counting clicks ourselves sidesteps that.
         let singleClickTimer = null;
         line.on('click', (e) => {
-            L.DomEvent.stop(e); // don't bubble to map click
             const tool = state.activeTool;
+            // Draw mode owns the click — let it bubble to the map handler so
+            // the track underneath doesn't swallow the point-add.
+            if (tool === 'draw') return;
+            L.DomEvent.stop(e); // don't bubble to map click
             if (tool === 'merge') {
                 handleMergeTrackClick(line, e.latlng);
                 return;
@@ -170,14 +276,17 @@ function drawWaypoints() {
         const ele  = directChildText(wpt, 'ele');
         const sym  = directChildText(wpt, 'sym');
         const color = wptColor(wpt) || '#0066cc';
-        const marker = L.circleMarker([lat, lon], {
-            radius: 6,
-            color: color,
-            fillColor: color,
-            fillOpacity: 0.85,
-            weight: 2,
-            pane: 'basePane',
-        });
+        const emoji = wptSymbolEmoji(wpt);
+        const marker = emoji
+            ? L.marker([lat, lon], {icon: wptDivIcon(emoji, color, 1), pane: 'basePane'})
+            : L.circleMarker([lat, lon], {
+                radius: 6,
+                color: color,
+                fillColor: color,
+                fillOpacity: 0.85,
+                weight: 2,
+                pane: 'basePane',
+            });
         marker._wptEl = wpt;
         marker._wptName = name;
         marker.bindTooltip(name, {direction: 'top'});
@@ -271,11 +380,20 @@ function drawOverlayBases() {
             if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
             const wptName = directChildText(wpt, 'name') || '(waypoint)';
             const color = wptColor(wpt) || '#0066cc';
-            const marker = L.circleMarker([lat, lon], {
-                radius: 5, color, fillColor: color,
-                fillOpacity: OVERLAY_LINE_OPACITY, opacity: OVERLAY_WPT_OPACITY,
-                weight: 2, interactive: false, pane: 'basePane',
-            });
+            const emoji = wptSymbolEmoji(wpt);
+            // Overlay marker: non-interactive and dimmed so it reads as context,
+            // but we still honor the symbol so the user can spot a trailhead /
+            // scenic viewpoint across all loaded GPX files.
+            const marker = emoji
+                ? L.marker([lat, lon], {
+                    icon: wptDivIcon(emoji, color, 0.85),
+                    pane: 'basePane', interactive: false, opacity: OVERLAY_WPT_OPACITY,
+                })
+                : L.circleMarker([lat, lon], {
+                    radius: 5, color, fillColor: color,
+                    fillOpacity: OVERLAY_LINE_OPACITY, opacity: OVERLAY_WPT_OPACITY,
+                    weight: 2, interactive: false, pane: 'basePane',
+                });
             marker.bindTooltip(`${wptName} — ${name}`, {direction: 'top'});
             layers.push(marker);
         }
@@ -327,8 +445,11 @@ function drawRide() {
         line.bindTooltip(`${rideLabel} — ${segLabel}`, {sticky: true, direction: 'top'});
         if (seg.novel) {
             line.on('click', (e) => {
-                L.DomEvent.stop(e);
                 const tool = state.activeTool;
+                // Same as base polylines — in draw mode let the click fall
+                // through to the map handler.
+                if (tool === 'draw') return;
+                L.DomEvent.stop(e);
                 if (tool === 'merge') handleMergeSegClick(seg);
                 else if (tool === 'split') splitSegmentAt(seg.id, e.latlng);
                 else if (!tool) toggleSegment(seg.id);

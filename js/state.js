@@ -180,9 +180,21 @@ state.toolHistory = []; // snapshots of the current tool's point buffer for in-t
 state.toolRedoStack = []; // paired redo for the in-tool history
 state.trackGraph = null; // lazy-built graph of base tracks for snap-routing
 state.drawRoutePreview = null; // L.polyline showing the pending draw-route path
-// Snap-to-tracks: on a draw click that falls on an existing track, route
-// along the track network (Dijkstra) rather than drawing a straight line.
-state.snapToTracksEnabled = localStorage.getItem('gpxtools.snapToTracks') !== '0';
+// Draw mode: 'straight' — raw point-to-point, no snapping at all.
+//            'follow'   — snap to the nearest graph node and use shortest path
+//                         through the track network (chase+jump on gaps).
+state.drawMode = localStorage.getItem('gpxtools.drawMode') === 'straight' ? 'straight' : 'follow';
+// Tunables for the snap-draw graph. Internal units are always meters; the
+// settings UI converts to the user's imperial/metric display preference. The
+// defaults in spatial.js apply when localStorage has no value.
+(() => {
+    const read = (key) => {
+        const v = parseFloat(localStorage.getItem(key));
+        return Number.isFinite(v) ? v : null;
+    };
+    const j = read('gpxtools.snapJunctionM');  if (j !== null) state.snapJunctionM = j;
+    const b = read('gpxtools.snapBridgeM');    if (b !== null) state.snapBridgeM   = b;
+})();
 
 // Back-compat getters — existing code paths reference these.
 Object.defineProperty(state, 'splitMode', { get() { return this.activeTool === 'split'; } });

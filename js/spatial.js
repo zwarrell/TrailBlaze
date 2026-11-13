@@ -177,9 +177,15 @@ function ptLatLng(trkpt) {
 // DRAW_ROUTE_SIMPLIFY_M thins the routed path at click-time so a drawn
 // track is less dense than the source track it followed.
 const TRACK_GRAPH_SNAP_M = 3;
-const JUNCTION_PROJECT_M = 12;
-const BRIDGE_DEAD_END_M = 30;
 const DRAW_ROUTE_SIMPLIFY_M = 3;
+// Defaults for the user-tunable snap thresholds. Live values come from the
+// state.snap* fields (settings-modal backed, persisted to localStorage).
+// Maps with many parallel tracks (e.g. side-by-side trail splits) call for
+// smaller values so distinct lines aren't spuriously stitched together.
+const DEFAULT_JUNCTION_PROJECT_M = 20;
+const DEFAULT_BRIDGE_DEAD_END_M = 60;
+const snapJunctionM = () => state.snapJunctionM ?? DEFAULT_JUNCTION_PROJECT_M;
+const snapBridgeM   = () => state.snapBridgeM   ?? DEFAULT_BRIDGE_DEAD_END_M;
 function buildTrackGraph(docs) {
     if (!Array.isArray(docs)) docs = [docs];
     const nodes = [];       // [{lat, lon}]
@@ -254,8 +260,8 @@ function buildTrackGraph(docs) {
     }
 
     const graph = {nodes, adj, grid, cellDeg};
-    connectJunctions(graph, JUNCTION_PROJECT_M);
-    bridgeDeadEnds(graph, BRIDGE_DEAD_END_M);
+    connectJunctions(graph, snapJunctionM());
+    bridgeDeadEnds(graph, snapBridgeM());
     return graph;
 }
 
@@ -414,18 +420,24 @@ function collectSnapDocs() {
     return docs;
 }
 
-// Ensure state.trackGraph matches the current snap-doc set. Cheap when
-// already in sync (shallow reference-array check); rebuilds on any doc swap
-// (active edit, overlay toggle, new file load).
+// Ensure state.trackGraph matches the current snap-doc set and snap-tuning
+// settings. Cheap when already in sync (shallow reference-array + three-float
+// check); rebuilds on any doc swap (active edit, overlay toggle, new file
+// load) or any snap-threshold adjustment from the settings modal.
 function ensureTrackGraph() {
     const docs = collectSnapDocs();
     if (!docs.length) { state.trackGraph = null; return null; }
     const g = state.trackGraph;
-    if (g && g._docs && g._docs.length === docs.length && g._docs.every((d, i) => d === docs[i])) {
+    const jm = snapJunctionM(), bm = snapBridgeM();
+    if (g && g._docs && g._docs.length === docs.length
+        && g._docs.every((d, i) => d === docs[i])
+        && g._junctionM === jm && g._bridgeM === bm) {
         return g;
     }
     state.trackGraph = buildTrackGraph(docs);
     state.trackGraph._docs = docs;
+    state.trackGraph._junctionM = jm;
+    state.trackGraph._bridgeM = bm;
     return state.trackGraph;
 }
 
@@ -456,11 +468,14 @@ function findSnapNode(latlng, pxThreshold = 15) {
     return {idx: bestIdx, latlng: L.latLng(nodes[bestIdx].lat, nodes[bestIdx].lon), dist: bestDist};
 }
 
-// Dijkstra shortest path from node fromIdx to toIdx. Returns an array of node
-// indices (inclusive at both ends) or null if disconnected.
-function shortestPathOnTracks(fromIdx, toIdx) {
+// Full single-source Dijkstra from fromIdx. Returns {dist, prev} Float64/Int32
+// arrays. Cached per (graph, fromIdx) because draw-mode mousemove queries
+// many targets from the same starting node.
+function shortestPathsFrom(fromIdx) {
     const g = ensureTrackGraph();
-    if (!g || fromIdx === toIdx) return fromIdx === toIdx ? [fromIdx] : null;
+    if (!g || fromIdx < 0 || fromIdx >= g.nodes.length) return null;
+    const cache = state._dijkstraCache;
+    if (cache && cache.graph === g && cache.fromIdx === fromIdx) return cache;
     const n = g.nodes.length;
     const dist = new Float64Array(n);
     const prev = new Int32Array(n);
@@ -502,7 +517,6 @@ function shortestPathOnTracks(fromIdx, toIdx) {
         const [d, u] = heapPop();
         if (visited[u]) continue;
         visited[u] = 1;
-        if (u === toIdx) break;
         if (d > dist[u]) continue;
         for (const e of g.adj[u]) {
             if (visited[e.to]) continue;
@@ -514,11 +528,64 @@ function shortestPathOnTracks(fromIdx, toIdx) {
             }
         }
     }
-    if (dist[toIdx] === Infinity) return null;
+    state._dijkstraCache = {graph: g, fromIdx, dist, prev};
+    return state._dijkstraCache;
+}
+
+function reconstructPath(prevArr, toIdx) {
     const path = [];
-    for (let u = toIdx; u !== -1; u = prev[u]) path.push(u);
+    for (let u = toIdx; u !== -1 && path.length < 100000; u = prevArr[u]) path.push(u);
     path.reverse();
     return path;
+}
+
+// Convenience wrapper — single-target shortest path. Returns node indices
+// (inclusive at both ends) or null if unreachable.
+function shortestPathOnTracks(fromIdx, toIdx) {
+    if (fromIdx === toIdx) return [fromIdx];
+    const r = shortestPathsFrom(fromIdx);
+    if (!r || r.dist[toIdx] === Infinity) return null;
+    return reconstructPath(r.prev, toIdx);
+}
+
+// Find the node reachable from fromIdx that gives the best chase-and-jump
+// path to targetLatLng — that is, the node that minimizes
+// (cost to reach it) + (straight-line to target). Returns {exitIdx, path,
+// chaseLen, jumpLen} or null. exitIdx === fromIdx means no useful chase.
+function bestChaseExitTowards(fromIdx, targetLatLng) {
+    const r = shortestPathsFrom(fromIdx);
+    if (!r) return null;
+    const g = state.trackGraph;
+    const {dist, prev} = r;
+    let bestIdx = fromIdx;
+    let bestTotal = haversineMeters(
+        g.nodes[fromIdx].lat, g.nodes[fromIdx].lon,
+        targetLatLng.lat,     targetLatLng.lng);
+    for (let i = 0; i < g.nodes.length; i++) {
+        if (dist[i] === Infinity) continue;
+        const toT = haversineMeters(g.nodes[i].lat, g.nodes[i].lon, targetLatLng.lat, targetLatLng.lng);
+        const total = dist[i] + toT;
+        if (total < bestTotal) { bestTotal = total; bestIdx = i; }
+    }
+    if (bestIdx === fromIdx) return {exitIdx: fromIdx, path: [fromIdx], chaseLen: 0, jumpLen: bestTotal};
+    const path = reconstructPath(prev, bestIdx);
+    const chaseLen = dist[bestIdx];
+    const jumpLen = haversineMeters(
+        g.nodes[bestIdx].lat, g.nodes[bestIdx].lon,
+        targetLatLng.lat,     targetLatLng.lng);
+    return {exitIdx: bestIdx, path, chaseLen, jumpLen};
+}
+
+// Walk a path (array of node indices) and sum its edge lengths.
+function pathLengthMeters(path) {
+    const g = state.trackGraph;
+    if (!g || !path || path.length < 2) return 0;
+    let d = 0;
+    for (let i = 1; i < path.length; i++) {
+        const a = g.nodes[path[i - 1]], b = g.nodes[path[i]];
+        d += haversineMeters(a.lat, a.lon, b.lat, b.lon);
+    }
+    return d;
 }
 
 // ---------- Resampling ----------
