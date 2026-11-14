@@ -644,6 +644,48 @@ body.contents-active #legend { display: none; }
     pointer-events: auto;
 }
 
+/* Slope-angle legend — Leaflet control pinned bottom-left while the slope
+   basemap is active. Mirrors the color stops from slope.js. */
+.slope-legend {
+    background: rgba(255, 255, 255, 0.94);
+    padding: 8px 10px 6px;
+    border-radius: 6px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+    font-size: 12px;
+    line-height: 1.35;
+    color: #222;
+    min-width: 110px;
+}
+.slope-legend-title {
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #555;
+    margin-bottom: 4px;
+}
+.slope-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-variant-numeric: tabular-nums;
+}
+.slope-legend-swatch {
+    width: 20px;
+    height: 10px;
+    border-radius: 2px;
+    border: 1px solid rgba(0, 0, 0, 0.18);
+    flex-shrink: 0;
+}
+@media (prefers-color-scheme: dark) {
+    .slope-legend {
+        background: rgba(30, 30, 32, 0.92);
+        color: #e8e8e8;
+    }
+    .slope-legend-title { color: #bbb; }
+    .slope-legend-swatch { border-color: rgba(255, 255, 255, 0.25); }
+}
+
 .wpt-popup-actions { margin-top: 6px; }
 .wpt-popup-actions button {
     padding: 3px 8px;

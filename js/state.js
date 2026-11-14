@@ -56,12 +56,10 @@ const usgsImageryTopo = L.tileLayer(
     });
 
 const baseLayers = {
-    "OpenStreetMap": L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: MAX_MAP_ZOOM,
-        maxNativeZoom: 19,
-        attribution: '© OpenStreetMap',
-        className: 'invert-in-dark',
-    }),
+    // No plain-OSM raster entry here: tile.openstreetmap.org blocks embedded
+    // apps per the OSMF tile usage policy, and CARTO's free CDN now requires
+    // an API key. OpenTopoMap below is OSM-based and keyless, so it covers
+    // the "OSM look" case.
     "USGS Topo": L.tileLayer('https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}', {
         maxZoom: MAX_MAP_ZOOM,
         maxNativeZoom: 16,
@@ -116,6 +114,44 @@ mvumLayer.on('error',   (e) => {
 const mvumForceRedraw = () => mvumLayer.redraw && mvumLayer.redraw();
 mvumLayer.on('add',    () => { map.on('moveend zoomend', mvumForceRedraw); mvumForceRedraw(); });
 mvumLayer.on('remove', () => { map.off('moveend zoomend', mvumForceRedraw); setMvumLoading(false); });
+
+// Slope-angle shading: AWS Open Data terrarium DEM pulled per-tile, slope
+// computed in-browser (see js/slope.js). Keyless, unlimited, global.
+// Low opacity so it reads as an overlay rather than hiding the basemap
+// underneath. maxNativeZoom matches the DEM's cap at z15 — further zoom
+// keeps the last computed tile.
+const slopeShadeLayer = L.gridLayer.slopeShade({
+    opacity: 0.6,
+    maxZoom: MAX_MAP_ZOOM,
+    maxNativeZoom: 15,
+    attribution: 'Elevation © AWS Terrain Tiles (SRTM, Mapzen)',
+});
+
+// Dedicated USGS Topo instance so the slope basemap owns its own tile layer —
+// can't share the main "USGS Topo" entry because Leaflet's layer control
+// reparents each basemap on switch, and a shared layer confuses the state.
+const usgsTopoForSlope = L.tileLayer('https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: MAX_MAP_ZOOM,
+    maxNativeZoom: 16,
+    attribution: 'Tiles courtesy of the U.S. Geological Survey',
+    className: 'invert-in-dark',
+});
+baseLayers["USGS Topo + Slope angle"] = L.layerGroup([usgsTopoForSlope, slopeShadeLayer]);
+
+// Show the color legend only while the slope layer is live on the map.
+const slopeLegend = L.control.slopeLegend();
+slopeShadeLayer.on('add', () => {
+    if (!map._slopeLegendShown) {
+        slopeLegend.addTo(map);
+        map._slopeLegendShown = true;
+    }
+});
+slopeShadeLayer.on('remove', () => {
+    if (map._slopeLegendShown) {
+        map.removeControl(slopeLegend);
+        map._slopeLegendShown = false;
+    }
+});
 
 const overlayLayers = {
     "USFS MVUM (motor use)": mvumLayer,
